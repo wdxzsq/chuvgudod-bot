@@ -1,0 +1,203 @@
+from __future__ import annotations
+
+from types import UnionType
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Union,
+    get_args,
+    get_origin,
+)
+
+from pydantic import BaseModel
+
+from ..types.updates.message_callback import MessageCallback
+from .filter import BaseFilter
+
+if TYPE_CHECKING:
+    from magic_filter import MagicFilter
+
+    from ..types.updates import UpdateUnion
+
+PAYLOAD_MAX = 1024
+
+
+class CallbackPayload(BaseModel):
+    """
+    Базовый класс для сериализации/десериализации callback payload.
+
+    Атрибуты:
+        prefix: Префикс для payload (используется при pack/unpack)
+            (по умолчанию название класса).
+        separator: Разделитель между значениями (по умолчанию '|').
+    """
+
+    if TYPE_CHECKING:
+        prefix: ClassVar[str]
+        separator: ClassVar[str]
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """
+        Автоматически проставляет prefix и separator при наследовании.
+        """
+
+        cls.prefix = kwargs.get("prefix", str(cls.__name__))
+        cls.separator = kwargs.get("separator", "|")
+
+    def pack(self) -> str:
+        """
+        Собирает данные payload в строку для передачи в callback
+        payload.
+
+        Raises:
+            ValueError: Если в значении встречается разделитель или
+                payload слишком длинный.
+
+        Returns:
+            str: Сериализованный payload.
+        """
+
+        values = [self.prefix]
+
+        for name in self.attrs():
+            value = getattr(self, name)
+            str_value = "" if value is None else str(value)
+            if self.separator in str_value:
+                raise ValueError(
+                    f'Символ разделителя "{self.separator}" '
+                    f"не должен встречаться в значении поля {name}"
+                )
+
+            values.append(str_value)
+
+        data = self.separator.join(values)
+
+        if len(data.encode()) > PAYLOAD_MAX:
+            raise ValueError(
+                f"Payload слишком длинный! Максимум: {PAYLOAD_MAX} байт"
+            )
+
+        return data
+
+    @classmethod
+    def unpack(cls, data: str) -> CallbackPayload:
+        """
+        Десериализует payload из строки.
+
+        Args:
+            data: Строка payload (из callback payload).
+
+        Raises:
+            ValueError: Некорректный prefix или количество аргументов.
+
+        Returns:
+            CallbackPayload: Экземпляр payload с заполненными полями.
+        """
+
+        parts = data.split(cls.separator)
+
+        if parts[0] != cls.prefix:
+            raise ValueError("Некорректный prefix")
+
+        field_names = cls.attrs()
+
+        if len(parts) - 1 != len(field_names):
+            raise ValueError(
+                f"Ожидалось {len(field_names)} аргументов, "
+                f"получено {len(parts) - 1}"
+            )
+
+        kwargs: dict[str, Any] = {}
+        for field_name, raw_value in zip(field_names, parts[1:], strict=True):
+            if raw_value == "" and cls._is_nullable_field(field_name):
+                kwargs[field_name] = None
+            else:
+                kwargs[field_name] = raw_value
+
+        # noinspection PyArgumentList
+        return cls(**kwargs)
+
+    @classmethod
+    def _is_nullable_field(cls, field_name: str) -> bool:
+        field = cls.model_fields[field_name]
+        annotation = field.annotation
+        origin = get_origin(annotation)
+
+        if origin in (Union, UnionType):
+            return type(None) in get_args(annotation)
+
+        return False
+
+    @classmethod
+    def attrs(cls) -> list[str]:
+        """
+        Возвращает список полей для сериализации/десериализации
+        (исключая prefix и separator).
+
+        Returns:
+            List[str]: Имена полей модели.
+        """
+
+        return [
+            k
+            for k in cls.model_fields.keys()
+            if k not in ("prefix", "separator")
+        ]
+
+    @classmethod
+    def filter(cls, rule: MagicFilter | None = None) -> PayloadFilter:
+        """
+        Создаёт PayloadFilter для фильтрации callback-ивентов по payload.
+
+        Args:
+            rule: Фильтр на payload.
+
+        Returns:
+            PayloadFilter: Экземпляр фильтра для хэндлера.
+        """
+
+        return PayloadFilter(model=cls, rule=rule)
+
+
+class PayloadFilter(BaseFilter):
+    """
+    Фильтр для MessageCallback по payload.
+    """
+
+    def __init__(self, model: type[CallbackPayload], rule: MagicFilter | None):
+        """
+        Args:
+            model: Класс payload для распаковки.
+            rule: Фильтр (условие) для payload.
+        """
+
+        self.model = model
+        self.rule = rule
+
+    async def __call__(self, event: UpdateUnion) -> dict[str, Any] | bool:
+        """
+        Проверяет event на MessageCallback и применяет фильтр к payload.
+
+        Args:
+            event: Обновление/событие.
+
+        Returns:
+            dict | bool: dict с payload при совпадении, иначе False.
+        """
+
+        if not isinstance(event, MessageCallback):
+            return False
+
+        if not event.callback.payload:
+            return False
+
+        try:
+            payload = self.model.unpack(event.callback.payload)
+        except Exception:
+            return False
+
+        if not self.rule or self.rule.resolve(payload):
+            return {"payload": payload}
+
+        return False
