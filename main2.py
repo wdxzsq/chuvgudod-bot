@@ -30,6 +30,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI
@@ -80,24 +81,28 @@ DB_PATH = os.getenv("DB_PATH") or str(DATA_DIR / "users.db")
 
 # Вебхук
 PORT = int(os.getenv("PORT", "8080"))                  # порт даёт хостинг
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")       # MAX шлёт его в заголовке X-Max-Bot-Api-Secret
 
 
-def _webhook_url() -> str:
-    """Полный адрес вебхука: WEBHOOK_URL, иначе https://DOMAIN + путь."""
+def _resolve_webhook() -> tuple[str, str]:
+    """Возвращает (полный адрес вебхука, путь на сервере) — они всегда совпадают.
+    Если в WEBHOOK_URL указан только домен без пути, добавляется /webhook."""
+    default_path = os.getenv("WEBHOOK_PATH", "/webhook")
     explicit = os.getenv("WEBHOOK_URL", "").strip()
     if explicit:
-        return explicit
+        parsed = urlparse(explicit)
+        path = parsed.path if parsed.path not in ("", "/") else default_path
+        return f"{parsed.scheme}://{parsed.netloc}{path}", path
+
     domain = os.getenv("DOMAIN", "").strip().rstrip("/")
     if not domain:
-        return ""
+        return "", default_path
     if not domain.startswith("http"):
         domain = "https://" + domain
-    return domain + WEBHOOK_PATH
+    return domain + default_path, default_path
 
 
-WEBHOOK_URL = _webhook_url()
+WEBHOOK_URL, WEBHOOK_PATH = _resolve_webhook()
 PORTRAIT_PATH = "chuvgusha.png"   # необязательно: портрет Чувгуши рядом с main.py
 
 # Чат модераторов. 0 = не настроен (задания сохраняются, но в чат не уходят)
@@ -1888,6 +1893,23 @@ async def _subscribe_via_http():
                 raise RuntimeError(f"MAX ответил {response.status}: {data}")
 
 
+async def _drop_stale_subscriptions():
+    """Удаляет старые подписки на другие адреса (например, на корень «/»), иначе MAX
+    продолжит слать на них события и получать 404."""
+    import aiohttp
+
+    api = "https://platform-api2.max.ru/subscriptions"
+    headers = {"Authorization": os.getenv("MAX_BOT_TOKEN", "")}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(api, headers=headers) as response:
+            data = await response.json(content_type=None)
+        for sub in (data or {}).get("subscriptions", []):
+            url = sub.get("url")
+            if url and url != WEBHOOK_URL:
+                async with session.delete(api, params={"url": url}, headers=headers):
+                    logging.info("Удалена старая подписка: %s", url)
+
+
 async def subscribe_webhook():
     """Говорит MAX, куда слать события. Делается через несколько секунд после старта
     сервера и с повторами: адрес должен уже отвечать."""
@@ -1912,6 +1934,10 @@ async def subscribe_webhook():
             if not done:
                 await _subscribe_via_http()
             logging.info("Вебхук подключён: %s", WEBHOOK_URL)
+            try:
+                await _drop_stale_subscriptions()
+            except Exception:
+                logging.warning("Не удалось проверить старые подписки (не критично)", exc_info=True)
             return
         except Exception:
             logging.exception("Подписка на вебхук не удалась (попытка %s из 5)", attempt)
