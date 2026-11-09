@@ -550,6 +550,42 @@ def delete_user_data(user_id: int):
             db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
 
 
+def mark_broadcast_started(broadcast_id: str):
+    """Отметка «рассылка начата» (user_id = -1): с этого момента её этап считается наступившим."""
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "INSERT OR IGNORE INTO broadcast_log (broadcast_id, user_id) VALUES (?, -1)",
+            (broadcast_id,),
+        )
+
+
+def broadcast_state(broadcast_id: str):
+    """-> (начата, завершена, сколько участников получили)"""
+    with sqlite3.connect(DB_PATH) as db:
+        ids = {r[0] for r in db.execute(
+            "SELECT user_id FROM broadcast_log WHERE broadcast_id = ?", (broadcast_id,)
+        )}
+    return (-1 in ids or 0 in ids), (0 in ids), sum(1 for i in ids if i > 0)
+
+
+def clear_broadcast(broadcast_id: str):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("DELETE FROM broadcast_log WHERE broadcast_id = ?", (broadcast_id,))
+
+
+def count_registered() -> int:
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute(
+            "SELECT COUNT(*) FROM users WHERE fio IS NOT NULL AND phone IS NOT NULL"
+        ).fetchone()[0]
+
+
+def orders_summary():
+    """-> (сколько покупок, на сколько баллов)"""
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute("SELECT COUNT(*), COALESCE(SUM(price), 0) FROM orders").fetchone()
+
+
 def ensure_user(user_id: int):
     """Строка пользователя нужна заранее: к ней привязывается «живая» панель."""
     with sqlite3.connect(DB_PATH) as db:
@@ -798,12 +834,26 @@ def phone_keyboard():
 PREVIEW_PHASE: dict[int, str] = {}   # user_id -> "closed" | "shop"
 
 
+# Рассылки, которые уже начались (по времени или вручную командой /send): они переключают этап
+# для ВСЕХ участников, независимо от часов. Хранится в базе, после перезапуска восстанавливается.
+FORCED_PHASE: set[str] = set()
+
+
 def tasks_closed(user_id: int | None = None) -> bool:
-    return datetime.now(MSK) >= TASKS_CLOSE_AT or PREVIEW_PHASE.get(user_id) in ("closed", "shop")
+    return (
+        datetime.now(MSK) >= TASKS_CLOSE_AT
+        or "thanks" in FORCED_PHASE
+        or shop_open(user_id)          # раз витрина открыта, приём заданий точно закрыт
+        or PREVIEW_PHASE.get(user_id) == "closed"
+    )
 
 
 def shop_open(user_id: int | None = None) -> bool:
-    return datetime.now(MSK) >= SHOP_OPEN_AT or PREVIEW_PHASE.get(user_id) == "shop"
+    return (
+        datetime.now(MSK) >= SHOP_OPEN_AT
+        or "exchange" in FORCED_PHASE
+        or PREVIEW_PHASE.get(user_id) == "shop"
+    )
 
 
 def panel_text(user_id: int | None = None) -> str:
@@ -1137,9 +1187,13 @@ def image_attachment(*names: str):
     return None
 
 
-def menu_image(user_id: int) -> str | None:
-    """Картинка «Выбирай задание!» — только пока задания открыты."""
-    return None if tasks_closed(user_id) else "menu"
+def panel_image(user_id: int) -> str:
+    """Картинка главного экрана по этапу: задания открыты / закрыты / витрина."""
+    if shop_open(user_id):
+        return "gift"
+    if tasks_closed(user_id):
+        return "thanks"
+    return "menu"
 
 
 async def send_screen_message(text: str, keyboard=None, image=None, **target):
@@ -1199,7 +1253,12 @@ async def refresh_panel(user_id: int):
     """Обновить панель участника на месте (после решения модератора)."""
     mid, view = get_panel(user_id)
     rendered = render_view(user_id, view)
-    if mid and rendered:
+    if not rendered:
+        return
+    if view in ("menu", "notice"):
+        # меню — новым сообщением, чтобы вернулась картинка
+        await show_screen(user_id, rendered[0], rendered[1], "menu", image=panel_image(user_id))
+    elif mid:
         await edit_message_safe(mid, *rendered)
 # endregion
 
@@ -1212,7 +1271,7 @@ async def run_start_flow(chat_id: int, user_id: int, context: MemoryContext):
     if is_registered(user_id):
         await show_screen(
         user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
-        image=menu_image(user_id),
+        image=panel_image(user_id),
     )
         return
 
@@ -1279,6 +1338,104 @@ async def on_queue(event: MessageCreated):
     await event.message.answer(f"Ожидают проверки: {total}. Показываю первые {len(ids)}.")
     for sub_id in ids:
         await send_to_moderation(sub_id)
+
+
+_BG_TASKS: set = set()   # ссылки на фоновые рассылки (чтобы их не убрал сборщик мусора)
+BROADCAST_EFFECT = {
+    "thanks": "закроет приём заданий у всех",
+    "exchange": "откроет витрину у всех (приём заданий тоже закроется)",
+}
+
+
+def _broadcast_arg(event: MessageCreated) -> tuple[str, list[str]]:
+    parts = (event.message.body.text or "").split()
+    name = parts[1].lstrip("/#") if len(parts) > 1 else ""
+    return name, parts
+
+
+# «/send thanks» — показать, сколько получателей; «/send thanks go» — запустить рассылку сейчас.
+# Этап (закрытие заданий / витрина) переключается у всех, как будто наступило время.
+@dp.message_created(Command("send"))
+async def on_send(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    name, parts = _broadcast_arg(event)
+    items = {item["id"]: item for item in SCHEDULE}
+    if name not in items:
+        await event.message.answer("Использование: /send thanks или /send exchange (запуск: добавьте слово go)")
+        return
+
+    _, done, sent = broadcast_state(name)
+    if done:
+        await event.message.answer(
+            f"Рассылка «{name}» уже завершена (получили {sent}). Повторить: /undo {name}, затем /send {name}."
+        )
+        return
+    if name in _RUNNING:
+        await event.message.answer(f"Рассылка «{name}» уже идёт.")
+        return
+
+    total = len(unsent_users(name))
+    if not (len(parts) > 2 and parts[2].lower() in ("go", "да", "yes")):
+        await event.message.answer(
+            f"Рассылка «{name}»: получателей {total}. Она {BROADCAST_EFFECT[name]}.\n"
+            f"Запустить: /send {name} go"
+        )
+        return
+
+    await event.message.answer(f"Запускаю рассылку «{name}»: {total} получателей. Итог придёт сюда.")
+    task = asyncio.create_task(run_broadcast(items[name]))   # в фоне: вебхуку нужно ответить быстро
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
+# «/undo thanks» — откатить принудительный запуск (до времени рассылки): этап снова по часам,
+# рассылку можно запустить заново. Уже отправленные сообщения у участников остаются.
+@dp.message_created(Command("undo"))
+async def on_undo(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    name, _ = _broadcast_arg(event)
+    items = {item["id"]: item for item in SCHEDULE}
+    if name not in items:
+        await event.message.answer("Использование: /undo thanks или /undo exchange")
+        return
+    if name in _RUNNING:
+        await event.message.answer("Идёт отправка — подождите её завершения.")
+        return
+    if datetime.now(MSK) >= items[name]["at"]:
+        await event.message.answer(
+            "Время этой рассылки уже наступило — после отката бот отправил бы её снова сам. "
+            "Полный откат — очистка базы на хостинге."
+        )
+        return
+    clear_broadcast(name)
+    FORCED_PHASE.discard(name)
+    await event.message.answer(
+        f"Рассылка «{name}» откатена: этап снова по времени ({items[name]['at']:%d.%m %H:%M} МСК)."
+    )
+
+
+# «/status» — сводка: этапы, рассылки, очередь проверки, покупки
+@dp.message_created(Command("status"))
+async def on_status(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    now = datetime.now(MSK)
+    lines = [
+        f"📊 Статус на {now:%d.%m %H:%M} (МСК)",
+        f"Зарегистрировано: {count_registered()}",
+        f"Ожидают проверки: {count_pending()}",
+        f"Приём заданий: {'закрыт' if tasks_closed() else 'открыт'}",
+        f"Витрина: {'открыта' if shop_open() else 'закрыта'}",
+    ]
+    for item in SCHEDULE:
+        started, done, sent = broadcast_state(item["id"])
+        state = "завершена" if done else "идёт" if item["id"] in _RUNNING else "начата" if started else "ждёт"
+        lines.append(f"Рассылка «{item['id']}» ({item['at']:%d.%m %H:%M}): {state}, получили {sent}")
+    count, total = orders_summary()
+    lines.append(f"Покупок: {count} на {total} б")
+    await event.message.answer("\n".join(lines))
 
 
 # «/resetme» — удалить ВАШИ данные (регистрацию, ответы, покупки), чтобы пройти всё заново.
@@ -1396,7 +1553,7 @@ async def on_phone(event: MessageCreated, context: MemoryContext):
     await send_screen_message(TEXT_MEDIABINGO, image="registered", chat_id=chat_id)
     await show_screen(
         user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
-        image=menu_image(user_id),
+        image=panel_image(user_id),
     )
 # endregion
 
@@ -1406,8 +1563,10 @@ async def on_phone(event: MessageCreated, context: MemoryContext):
 async def on_menu(event: MessageCallback, context: MemoryContext):
     await context.clear()   # вышли из режима «жду ответ на задание»
     user_id = event.callback.user.user_id
-    track(event, user_id, "menu")
-    await event.message.edit(text=panel_text(user_id), attachments=[panel_keyboard(user_id)])
+    track(event, user_id, "menu")   # чтобы это сообщение удалилось при показе нового
+    await show_screen(
+        user_id, panel_text(user_id), panel_keyboard(user_id), "menu", image=panel_image(user_id)
+    )
 
 
 @dp.message_callback(F.callback.payload == "profile")
@@ -1820,10 +1979,11 @@ async def on_buy(event: MessageCallback):
 
     result, order_id = create_order(user_id, lot["id"], lot["price"])
     if result == "ok":
-        track(event, user_id, "orders")
+        track(event, user_id, "orders")   # чтобы экран подтверждения удалился
         paid = TEXT_ORDERED.format(name=lot["name"], price=lot["price"], left=get_balance(user_id))
-        text, keyboard = f"{paid}\n\n{orders_text(user_id)}", orders_keyboard()
-        await event.message.edit(text=text, attachments=[keyboard])
+        await show_screen(
+            user_id, f"{paid}\n\n{orders_text(user_id)}", orders_keyboard(), "orders", image="gift"
+        )
         return
     track(event, user_id, "flow")
 
@@ -1874,26 +2034,47 @@ async def send_broadcast_item(item: dict, user_id: int):
         )
 
 
-async def run_broadcast(item: dict):
-    ok = failed = 0
-    for user_id in unsent_users(item["id"]):
-        try:
-            await send_broadcast_item(item, user_id)
-            ok += 1
-        except Exception:
-            failed += 1
-            logging.exception("Рассылка %s: не доставлено %s", item["id"], user_id)
-        mark_sent(item["id"], user_id)   # не повторяем и при ошибке
-        await asyncio.sleep(0.05)        # мягко по лимитам API
-    mark_broadcast_done(item["id"])
+_RUNNING: set[str] = set()   # рассылки, которые идут прямо сейчас
 
-    summary = f"📣 Рассылка «{item['id']}»: отправлено {ok}, ошибок {failed}"
-    logging.info(summary)
-    if ADMIN_CHAT_ID:
-        try:
-            await bot.send_message(chat_id=ADMIN_CHAT_ID, text=summary)
-        except Exception:
-            logging.exception("Не удалось отправить итог рассылки")
+
+def load_forced_phases():
+    """После перезапуска вспоминаем, какие рассылки уже начинались (в том числе вручную)."""
+    for item in SCHEDULE:
+        started, _, _ = broadcast_state(item["id"])
+        if started:
+            FORCED_PHASE.add(item["id"])
+
+
+async def run_broadcast(item: dict):
+    """Отправка рассылки всем, кому она ещё не ушла. Можно прервать и продолжить (после сбоя)."""
+    if item["id"] in _RUNNING:
+        return
+    _RUNNING.add(item["id"])
+    try:
+        mark_broadcast_started(item["id"])    # этап наступил для всех — сразу, до отправки
+        FORCED_PHASE.add(item["id"])
+
+        ok = failed = 0
+        for user_id in unsent_users(item["id"]):
+            try:
+                await send_broadcast_item(item, user_id)
+                ok += 1
+            except Exception:
+                failed += 1
+                logging.exception("Рассылка %s: не доставлено %s", item["id"], user_id)
+            mark_sent(item["id"], user_id)   # не повторяем и при ошибке
+            await asyncio.sleep(0.05)        # мягко по лимитам API
+        mark_broadcast_done(item["id"])
+
+        summary = f"📣 Рассылка «{item['id']}»: отправлено {ok}, ошибок {failed}"
+        logging.info(summary)
+        if ADMIN_CHAT_ID:
+            try:
+                await bot.send_message(chat_id=ADMIN_CHAT_ID, text=summary)
+            except Exception:
+                logging.exception("Не удалось отправить итог рассылки")
+    finally:
+        _RUNNING.discard(item["id"])
 
 
 async def scheduler():
@@ -1902,7 +2083,7 @@ async def scheduler():
         try:
             now = datetime.now(MSK)
             for item in SCHEDULE:
-                if now < item["at"] or is_broadcast_done(item["id"]):
+                if now < item["at"] or is_broadcast_done(item["id"]) or item["id"] in _RUNNING:
                     continue
                 if now - item["at"] > timedelta(hours=MAX_LATE_HOURS):
                     logging.warning("Рассылка %s пропущена: время прошло более %s ч назад",
@@ -1932,7 +2113,7 @@ async def on_any_message(event: MessageCreated):
         return
     await show_screen(
         user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
-        image=menu_image(user_id),
+        image=panel_image(user_id),
     )
 # endregion
 
@@ -1975,6 +2156,7 @@ async def subscribe_webhook():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db_init()
+    load_forced_phases()
 
     # Защита от падений в обработчиках
     if BaseMiddleware:
