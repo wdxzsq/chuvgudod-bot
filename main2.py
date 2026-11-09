@@ -236,7 +236,6 @@ TEXT_ORDERS = (
     "Оплачено баллами: {total} б\n\n"
     "Покажи этот экран администратору у стола с мерчом."
 )
-TEXT_PANEL_CLOSED = "Приём заданий завершён. Витрина скоро появится."
 TEXT_PANEL_SHOP = "Витрина открыта — выбирай подарки!"
 TEXT_REJECTED = "❌ Задание {short}: условия не соблюдены, задание не зачтено."
 TEXT_REJECTED_RETRY = "Попробуй ещё раз: открой задание и отправь новый ответ."
@@ -794,34 +793,33 @@ def phone_keyboard():
     return kb.as_markup()
 
 
-def tasks_closed() -> bool:
-    return datetime.now(MSK) >= TASKS_CLOSE_AT
+# Режим проверки: «/preview thanks» и «/preview exchange» переводят ЭТОТ аккаунт в состояние
+# «после 13:05» / «после 13:40», чтобы проверить всё заранее. Остальных участников не касается.
+PREVIEW_PHASE: dict[int, str] = {}   # user_id -> "closed" | "shop"
 
 
-def shop_open() -> bool:
-    return datetime.now(MSK) >= SHOP_OPEN_AT
+def tasks_closed(user_id: int | None = None) -> bool:
+    return datetime.now(MSK) >= TASKS_CLOSE_AT or PREVIEW_PHASE.get(user_id) in ("closed", "shop")
 
 
-# Кто проверяет витрину командой /preview exchange до 13:40: для них она открыта сразу
-PREVIEW_USERS: set[int] = set()
+def shop_open(user_id: int | None = None) -> bool:
+    return datetime.now(MSK) >= SHOP_OPEN_AT or PREVIEW_PHASE.get(user_id) == "shop"
 
 
-def shop_open_for(user_id: int) -> bool:
-    return shop_open() or user_id in PREVIEW_USERS
-
-
-def panel_text() -> str:
-    if shop_open():
+def panel_text(user_id: int | None = None) -> str:
+    """Текст главного экрана. После закрытия заданий это текст первой рассылки —
+    поэтому «Назад» из профиля возвращает именно к нему."""
+    if shop_open(user_id):
         return TEXT_PANEL_SHOP
-    if tasks_closed():
-        return TEXT_PANEL_CLOSED
+    if tasks_closed(user_id):
+        return TEXT_BROADCAST_THANKS
     return TEXT_PANEL
 
 
-def closed_panel_keyboard():
+def closed_panel_keyboard(user_id: int | None = None):
     """После закрытия заданий: кнопка витрины (или ожидания) и профиль."""
     kb = InlineKeyboardBuilder()
-    if shop_open():
+    if shop_open(user_id):
         kb.row(CallbackButton(text=BUTTON_SHOP, payload="shop"))
     else:
         kb.row(CallbackButton(text=BUTTON_WAIT_SHOP, payload="wait_shop"))   # «неактивная» кнопка
@@ -831,8 +829,8 @@ def closed_panel_keyboard():
 
 def panel_keyboard(user_id: int):
     """Главная панель. До 13:05 — задания, профиль, правила; после — витрина и профиль."""
-    if tasks_closed():
-        return closed_panel_keyboard()
+    if tasks_closed(user_id):
+        return closed_panel_keyboard(user_id)
     statuses = get_statuses(user_id)
     kb = InlineKeyboardBuilder()
     for row in PANEL_ROWS:
@@ -850,9 +848,9 @@ def panel_keyboard(user_id: int):
     return kb.as_markup()
 
 
-def back_keyboard(payload: str = "menu"):
+def back_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.row(CallbackButton(text=BUTTON_BACK, payload=payload))
+    kb.row(CallbackButton(text=BUTTON_BACK, payload="menu"))
     return kb.as_markup()
 
 
@@ -934,7 +932,7 @@ def task_icon(user_id: int, task_id: str, statuses: dict) -> str:
 
 def can_submit(user_id: int, task_id: str) -> bool:
     """Можно ли сейчас отправлять ответ на задание."""
-    if tasks_closed():
+    if tasks_closed(user_id):
         return False
     status = get_statuses(user_id).get(task_id)
     if task_id in QUIZZES:
@@ -967,7 +965,7 @@ def task_view_text(user_id: int, task_id: str) -> str:
     text = task_text(user_id, task_id)
     status = get_statuses(user_id).get(task_id)
     retryable = status == "rejected" and task_id not in QUIZZES
-    if tasks_closed() and (not status or retryable):
+    if tasks_closed(user_id) and (not status or retryable):
         text += f"\n\n{TEXT_TASKS_CLOSED}"
     elif retryable:
         text += f"\n{TEXT_RETRY}"   # отказ — не конец: можно отправить ответ заново
@@ -1129,11 +1127,9 @@ def track(event: MessageCallback, user_id: int, view: str):
 def render_view(user_id: int, view: str | None):
     """Что показывать для вида панели. None — вид не обновляется автоматически."""
     if view in ("menu", "notice"):
-        return panel_text(), panel_keyboard(user_id)
+        return panel_text(user_id), panel_keyboard(user_id)
     if view == "profile":
         return TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard()
-    if view == "profile:static":   # профиль открыт из сообщения рассылки
-        return TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard("thanks")
     if view == "rules":
         return TEXT_MEDIABINGO, back_keyboard()
     if view == "shop":
@@ -1162,7 +1158,7 @@ async def run_start_flow(chat_id: int, user_id: int, context: MemoryContext):
 
     # Уже зарегистрирован — просто показываем панель (без повторных правил)
     if is_registered(user_id):
-        await show_screen(user_id, panel_text(), panel_keyboard(user_id), "menu", chat_id)
+        await show_screen(user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id)
         return
 
     ensure_user(user_id)
@@ -1234,23 +1230,29 @@ async def on_queue(event: MessageCreated):
         await send_to_moderation(sub_id)
 
 
-# «/preview thanks» или «/preview exchange» — рассылка приходит только вам.
-# Второе слово пишется без «/» и без «#».
+# «/preview thanks» — как после 13:05, «/preview exchange» — как после 13:40 (в этом аккаунте),
+# «/preview reset» — вернуть реальное время. Второе слово пишется без «/» и без «#».
 @dp.message_created(Command("preview"))
 async def on_preview(event: MessageCreated):
     if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
         return
+    user_id = event.message.sender.user_id
     parts = (event.message.body.text or "").split()
     name = parts[1].lstrip("/#") if len(parts) > 1 else ""
+
+    if name == "reset":
+        PREVIEW_PHASE.pop(user_id, None)
+        await event.message.answer("Режим проверки выключен: бот снова работает по реальному времени.")
+        return
+
     items = {item["id"]: item for item in SCHEDULE}
     if name not in items:
         await event.message.answer(
-            "Использование: " + " или ".join(f"/preview {i}" for i in items)
+            "Использование: " + " или ".join(f"/preview {i}" for i in [*items, "reset"])
         )
         return
-    user_id = event.message.sender.user_id
-    if name == "exchange":
-        PREVIEW_USERS.add(user_id)   # до 13:40 витрина открыта для вас, можно проверить покупку
+
+    PREVIEW_PHASE[user_id] = "shop" if name == "exchange" else "closed"
     await send_broadcast_item(items[name], user_id)
 # endregion
 
@@ -1326,7 +1328,7 @@ async def on_phone(event: MessageCreated, context: MemoryContext):
 
     await context.clear()
     await bot.send_message(chat_id=chat_id, text=TEXT_MEDIABINGO)
-    await show_screen(user_id, panel_text(), panel_keyboard(user_id), "menu", chat_id)
+    await show_screen(user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id)
 # endregion
 
 
@@ -1336,32 +1338,17 @@ async def on_menu(event: MessageCallback, context: MemoryContext):
     await context.clear()   # вышли из режима «жду ответ на задание»
     user_id = event.callback.user.user_id
     track(event, user_id, "menu")
-    await event.message.edit(text=panel_text(), attachments=[panel_keyboard(user_id)])
+    await event.message.edit(text=panel_text(user_id), attachments=[panel_keyboard(user_id)])
 
 
 @dp.message_callback(F.callback.payload == "profile")
 async def on_profile_button(event: MessageCallback, context: MemoryContext):
     await context.clear()
     user_id = event.callback.user.user_id
-
-    # Если профиль открыт из сообщения рассылки, «Назад» должен вернуть к нему же
-    mid, prev_view = get_panel(user_id)
-    from_broadcast = prev_view == "static" and mid == event.message.body.mid
-
-    track(event, user_id, "profile:static" if from_broadcast else "profile")
+    track(event, user_id, "profile")
     await event.message.edit(
-        text=TEXT_PROFILE.format(points=get_balance(user_id)),
-        attachments=[back_keyboard("thanks" if from_broadcast else "menu")],
+        text=TEXT_PROFILE.format(points=get_balance(user_id)), attachments=[back_keyboard()]
     )
-
-
-@dp.message_callback(F.callback.payload == "thanks")
-async def on_back_to_broadcast(event: MessageCallback, context: MemoryContext):
-    """«Назад» из профиля -> снова сообщение рассылки с кнопками под ним."""
-    await context.clear()
-    user_id = event.callback.user.user_id
-    track(event, user_id, "static")
-    await event.message.edit(text=TEXT_BROADCAST_THANKS, attachments=[closed_panel_keyboard()])
 
 
 @dp.message_callback(F.callback.payload == "rules")
@@ -1495,7 +1482,7 @@ async def on_submission(event: MessageCreated, context: MemoryContext):
     if not task_id or not (text or attachments):
         return
 
-    if tasks_closed():
+    if tasks_closed(user_id):
         await context.clear()
         await show_screen(
             user_id, f"{TASKS[task_id]['title']}\n\n{TEXT_TASKS_CLOSED}",
@@ -1630,13 +1617,13 @@ async def on_moderation(event: MessageCallback):
     _, view = get_panel(user_id)
     if view in ("menu", "notice", "profile", "rules"):
         if approved:
-            template = TEXT_CONGRATS_SHORT if tasks_closed() else TEXT_CONGRATS
+            template = TEXT_CONGRATS_SHORT if tasks_closed(user_id) else TEXT_CONGRATS
             await show_screen(user_id, template.format(points=points),
                               panel_keyboard(user_id), "notice")
             return
         if task_id not in QUIZZES:
             text = TEXT_REJECTED.format(short=TASKS[task_id]["short"])
-            if not tasks_closed():
+            if not tasks_closed(user_id):
                 text += f"\n{TEXT_REJECTED_RETRY}"
             await show_screen(user_id, text, panel_keyboard(user_id), "notice")
             return
@@ -1712,7 +1699,7 @@ async def on_wait_shop(event: MessageCallback):
 async def on_shop(event: MessageCallback, context: MemoryContext):
     await context.clear()
     user_id = event.callback.user.user_id
-    if not shop_open_for(user_id):
+    if not shop_open(user_id):
         await event.answer(notification=TEXT_WAIT_SHOP.format(time=SHOP_OPEN_AT.strftime("%H:%M")))
         return
     track(event, user_id, "shop")
@@ -1724,7 +1711,7 @@ async def on_lot(event: MessageCallback):
     """Выбор подарка -> экран подтверждения (или причина, почему нельзя)."""
     user_id = event.callback.user.user_id
     lot = LOTS_BY_ID.get(event.callback.payload.split(":", 1)[1])
-    if not lot or not shop_open_for(user_id):
+    if not lot or not shop_open(user_id):
         return
     track(event, user_id, "flow")
 
@@ -1746,7 +1733,7 @@ async def on_buy(event: MessageCallback):
     """Подтверждение покупки. Баллы и лимит проверяются в БД атомарно."""
     user_id = event.callback.user.user_id
     lot = LOTS_BY_ID.get(event.callback.payload.split(":", 1)[1])
-    if not lot or not shop_open_for(user_id):
+    if not lot or not shop_open(user_id):
         return
 
     now = time.time()                       # защита от двойного нажатия
@@ -1805,7 +1792,7 @@ async def send_broadcast_item(item: dict, user_id: int):
         await bot.send_message(user_id=user_id, text=item["text"])
         await show_screen(user_id, shop_text(user_id), shop_keyboard(), "shop")
     else:
-        await show_screen(user_id, item["text"], closed_panel_keyboard(), "static")
+        await show_screen(user_id, item["text"], closed_panel_keyboard(user_id), "menu")
 
 
 async def run_broadcast(item: dict):
@@ -1864,7 +1851,7 @@ async def on_any_message(event: MessageCreated):
     user_id = event.message.sender.user_id
     if not is_registered(user_id) or too_fast(user_id):
         return
-    await show_screen(user_id, panel_text(), panel_keyboard(user_id), "menu", chat_id)
+    await show_screen(user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id)
 # endregion
 
 
@@ -1875,44 +1862,10 @@ if WEBHOOK_SECRET and "secret" in inspect.signature(FastAPIMaxWebhook.__init__).
 webhook = FastAPIMaxWebhook(**webhook_kwargs)
 
 
-async def _subscribe_via_http():
-    """Запасной путь: официальный запрос POST /subscriptions к API MAX."""
-    import aiohttp
-
-    body = {"url": WEBHOOK_URL}
-    if WEBHOOK_SECRET:
-        body["secret"] = WEBHOOK_SECRET
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://platform-api2.max.ru/subscriptions",
-            json=body,
-            headers={"Authorization": os.getenv("MAX_BOT_TOKEN", "")},
-        ) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200 or not data.get("success"):
-                raise RuntimeError(f"MAX ответил {response.status}: {data}")
-
-
-async def _drop_stale_subscriptions():
-    """Удаляет старые подписки на другие адреса (например, на корень «/»), иначе MAX
-    продолжит слать на них события и получать 404."""
-    import aiohttp
-
-    api = "https://platform-api2.max.ru/subscriptions"
-    headers = {"Authorization": os.getenv("MAX_BOT_TOKEN", "")}
-    async with aiohttp.ClientSession() as session:
-        async with session.get(api, headers=headers) as response:
-            data = await response.json(content_type=None)
-        for sub in (data or {}).get("subscriptions", []):
-            url = sub.get("url")
-            if url and url != WEBHOOK_URL:
-                async with session.delete(api, params={"url": url}, headers=headers):
-                    logging.info("Удалена старая подписка: %s", url)
-
-
 async def subscribe_webhook():
-    """Говорит MAX, куда слать события. Делается через несколько секунд после старта
-    сервера и с повторами: адрес должен уже отвечать."""
+    """Говорит MAX, куда слать события. Сначала удаляются старые подписки (например, на другой
+    адрес), потом создаётся нужная. Всё через методы библиотеки (она сама доверяет сертификату MAX).
+    Запускается через несколько секунд после старта сервера, с повторами: адрес уже должен отвечать."""
     if not WEBHOOK_URL:
         logging.error("Адрес вебхука не задан: включите «Использовать домен» или укажите WEBHOOK_URL")
         return
@@ -1920,24 +1873,16 @@ async def subscribe_webhook():
     for attempt in range(1, 6):
         await asyncio.sleep(3)
         try:
-            method = getattr(bot, "subscribe_webhook", None)
-            done = False
-            if method is not None:
-                try:
-                    kwargs = {"url": WEBHOOK_URL}
-                    if WEBHOOK_SECRET:
-                        kwargs["secret"] = WEBHOOK_SECRET
-                    await method(**kwargs)
-                    done = True
-                except TypeError:
-                    logging.info("У bot.subscribe_webhook другие параметры — подписываюсь через API напрямую")
-            if not done:
-                await _subscribe_via_http()
-            logging.info("Вебхук подключён: %s", WEBHOOK_URL)
             try:
-                await _drop_stale_subscriptions()
+                await bot.delete_webhook()
             except Exception:
-                logging.warning("Не удалось проверить старые подписки (не критично)", exc_info=True)
+                logging.warning("Не удалось удалить старые подписки (не критично)", exc_info=True)
+
+            kwargs = {"url": WEBHOOK_URL}
+            if WEBHOOK_SECRET:
+                kwargs["secret"] = WEBHOOK_SECRET
+            await bot.subscribe_webhook(**kwargs)
+            logging.info("Вебхук подключён: %s", WEBHOOK_URL)
             return
         except Exception:
             logging.exception("Подписка на вебхук не удалась (попытка %s из 5)", attempt)
