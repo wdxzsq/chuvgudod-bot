@@ -562,6 +562,13 @@ def mark_broadcast_done(broadcast_id: str):
         )
 
 
+def delete_user_data(user_id: int):
+    """Удаляет все данные одного участника (для проверки регистрации заново)."""
+    with sqlite3.connect(DB_PATH) as db:
+        for table in ("submissions", "orders", "broadcast_log", "users"):
+            db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+
+
 def ensure_user(user_id: int):
     """Строка пользователя нужна заранее: к ней привязывается «живая» панель."""
     with sqlite3.connect(DB_PATH) as db:
@@ -1230,6 +1237,21 @@ async def on_queue(event: MessageCreated):
         await send_to_moderation(sub_id)
 
 
+# «/resetme» — удалить ВАШИ данные (регистрацию, ответы, покупки), чтобы пройти всё заново.
+# Данные других участников не затрагиваются.
+@dp.message_created(Command("resetme"))
+async def on_resetme(event: MessageCreated, context: MemoryContext):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    user_id = event.message.sender.user_id
+    old_panel, _ = get_panel(user_id)
+    delete_user_data(user_id)
+    PREVIEW_PHASE.pop(user_id, None)
+    await context.clear()
+    await delete_message_safe(old_panel)
+    await event.message.answer("Ваши данные удалены. Напишите боту /start, чтобы пройти регистрацию заново.")
+
+
 # «/preview thanks» — как после 13:05, «/preview exchange» — как после 13:40 (в этом аккаунте),
 # «/preview reset» — вернуть реальное время. Второе слово пишется без «/» и без «#».
 @dp.message_created(Command("preview"))
@@ -1557,18 +1579,14 @@ async def send_to_moderation(sub_id: int):
     # поэтому вложения участника пересылаются ОТДЕЛЬНЫМ сообщением, а карточка с кнопками идёт следом.
     note = ""
     if src_mid:
-        forwarded = False
-        for caption in (f"📎 К проверке #{sub_id}", None):
-            try:
-                await bot.send_message(
-                    chat_id=ADMIN_CHAT_ID, text=caption,
-                    link=NewMessageLink(type="forward", mid=src_mid),
-                )
-                forwarded = True
-                break
-            except Exception:
-                logging.exception("Не удалось переслать вложения (подпись: %r)", caption)
-        if not forwarded:
+        # MAX не принимает в пересылке ни кнопки, ни текст (ошибки forward.attaches / forward.text),
+        # поэтому она уходит «голой», а карточка с кнопками — сразу следом.
+        try:
+            await bot.send_message(
+                chat_id=ADMIN_CHAT_ID, link=NewMessageLink(type="forward", mid=src_mid)
+            )
+        except Exception:
+            logging.exception("Не удалось переслать вложения")
             note = "\n\n⚠️ Вложения переслать не удалось — смотрите у участника"
 
     await bot.send_message(
