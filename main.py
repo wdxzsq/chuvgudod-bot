@@ -10,9 +10,6 @@
 
 Для хостинга с вебхуками — main2.py. Логика у файлов одна и та же,
 отличается только блок «Запуск» внизу.
-
-Блоки помечены # region / # endregion — их можно сворачивать
-(PyCharm и VS Code поддерживают это из коробки).
 """
 
 # region Импорты
@@ -22,6 +19,7 @@ import os
 import re
 import sqlite3
 import time
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from maxapi import Bot, Dispatcher, F
@@ -58,7 +56,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 
 DB_PATH = os.getenv("DB_PATH", "users.db")
-PORTRAIT_PATH = "chuvgusha.png"   # необязательно: портрет Чувгуши рядом с main.py
+IMAGES_DIR = Path(__file__).resolve().parent / "images"   # картинки к ответам бота (см. images/README.txt)
 
 # Чат модераторов. 0 = не настроен (задания сохраняются, но в чат не уходят)
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "0"))
@@ -143,8 +141,8 @@ BUTTON_CONSENT = "✅ Согласен(на)"
 BUTTON_SHARE_PHONE = "📱 Поделиться номером"
 BUTTON_PROFILE = "📊 Мои баллы"
 BUTTON_BACK = "⬅️ Назад"
-TEXT_BAD_LINK = "Пришли ссылку на пост текстом, одним сообщением (не длиннее 500 символов)."
-TEXT_BAD_PHOTO = "Пришли снимок экрана картинкой."
+TEXT_BAD_STORY = "Пришли скриншот истории или ссылку на свой профиль (текстом, не длиннее 500 символов)."
+TEXT_BAD_PHOTO = "Пришли скриншот картинкой."
 TEXT_TOO_MANY_FILES = "Слишком много файлов — отправь не больше 5."
 TEXT_BAD_OPEN = "Ответь коротко — тремя словами (не длиннее 100 символов)."
 BUTTON_RULES = "📖 Правила"
@@ -208,9 +206,23 @@ TEXT_CONGRATS_SHORT = "Поздравляю! Ты получил {points} бал
 # region Задания (сценарий)
 TAIL = "После проверки модераторами, тебе будут начислены баллы."
 
+
+def story_task(points: int, action: str) -> str:
+    """Задание «выложи историю в Макс» — одни и те же 4 шага для всех.
+    Ссылку на отдельную историю в Макс создать нельзя, поэтому принимаем скриншот
+    или ссылку на профиль (тогда история должна быть открыта для всех)."""
+    return (
+        f"{points} б. –\n"
+        f"1. {action}. Выложи в историю в Макс с хештегом #мывчувгу\n"
+        "2. Поставь показ на 48 часов и открой историю для всех\n"
+        "3. Пришли в бот скриншот истории или ссылку на свой профиль\n"
+        f"4. {TAIL}"
+    )
+
+
 # short  — подпись на кнопке
 # icon   — значок сложности (показывается, пока нет статуса)
-# points — варианты начисления для модератора (у викторин можно дать 5 или 10)
+# points — варианты начисления для модератора
 TASKS = {
     "1-1": {
         "short": "1.1", "icon": "🟩", "points": [5, 10],
@@ -225,12 +237,8 @@ TASKS = {
     "1-2": {
         "short": "1.2", "icon": "🟩", "points": [10],
         "title": "1 уровень · Задание 2",
-        "text": (
-            "10 б. –\n"
-            "1. Сними историю о том, как проходит День открытых дверей ЧувГУ — "
-            "покажи атмосферу. Выложи в личном аккаунте ВК или Макс с хештегом #мывчувгу\n"
-            "2. Отправь получившуюся ссылку в чат-бот.\n"
-            f"3. {TAIL}"
+        "text": story_task(
+            10, "Сними историю о том, как проходит День открытых дверей ЧувГУ — покажи атмосферу"
         ),
     },
     "1-3": {
@@ -251,86 +259,56 @@ TASKS = {
     "2-1": {
         "short": "2.1", "icon": "🟨", "points": [15],
         "title": "2 уровень · Задание 1",
-        "text": (
-            "15 б. –\n"
-            "1. Сделай фото с синим предметом, выложи в своём профиле ВК или Макс "
-            "с хештегом #мывчувгу\n"
-            "2. Пришли ссылку на пост в этот бот\n"
-            f"3. {TAIL}"
-        ),
+        "text": story_task(15, "Сделай фото с синим предметом"),
     },
     "2-2": {
         "short": "2.2", "icon": "🟨", "points": [15],
         "title": "2 уровень · Задание 2",
-        "text": (
-            "15 б. –\n"
-            "1. Сделай селфи с Ульяном, выложи в своём профиле ВК или Макс "
-            "с хештегом #мывчувгу\n"
-            "2. Пришли ссылку на пост в этот бот\n"
-            f"3. {TAIL}"
-        ),
+        "text": story_task(15, "Сделай селфи с Ульяном"),
     },
     "2-3": {
         "short": "2.3", "icon": "🟨", "points": [15],
         "title": "2 уровень · Задание 3",
         "text": (
             "15 б. –\n"
-            "1. Подпишись на каналы ЧувГУ в ВК и МАX:\n"
-            "https://vk.com/priemkomchgu\n"
-            "https://max.ru/chuvsu\n"
-            "2. Пришли снимки экрана с подпиской в этот бот\n"
+            "1. Подпишись на канал ЧувГУ в Макс: https://max.ru/chuvsu\n"
+            "2. Пришли в бот скриншот подписки\n"
             f"3. {TAIL}"
         ),
     },
     "3-1": {
         "short": "3.1", "icon": "🟥", "points": [30],
         "title": "3 уровень · Задание 1",
-        "text": (
-            "30 б. –\n"
-            "1. Сделай фото, где ты на площадках 3 факультетов, выложи их в личном "
-            "аккаунте с хештегом #мывчувгу\n"
-            "2. Пришли ссылку на пост в этот бот\n"
-            f"3. {TAIL}"
-        ),
+        "text": story_task(30, "Сделай фото, где ты на площадках 3 факультетов"),
     },
     "3-2": {
         "short": "3.2", "icon": "🟥", "points": [30],
         "title": "3 уровень · Задание 2",
-        "text": (
-            "30 б. –\n"
-            "Посети официальное мероприятие в концертном зале Дворца ЧГУ. "
-            "Поделись в своих социальных сетях инсайтом или расскажи, почему нужно "
-            "правильно выбирать вуз для поступления?\n"
-            "1. Опубликуй результат в своём профиле ВКонтакте или Макс и не забудь "
-            "указать хештеги #мывчувгу\n"
-            "2. Отправь получившуюся ссылку сюда в чат-бот.\n"
-            f"3. {TAIL}"
+        "text": story_task(
+            30,
+            "Посети официальное мероприятие в концертном зале Дворца ЧГУ и поделись инсайтом "
+            "или расскажи, почему нужно правильно выбирать вуз для поступления",
         ),
     },
     "extra": {
         "short": "Доп.", "icon": "🟩", "points": [10],
         "title": "Дополнительные баллы",
-        "text": (
-            "10 б. –\n"
-            "1. Сделай фото на площадке Военного учебного центра, выложи в своём профиле "
-            "ВК или Макс с хештегом #мывчувгу\n"
-            "2. Отправь получившуюся ссылку сюда в чат-бот.\n"
-            f"3. {TAIL}"
-        ),
+        "text": story_task(10, "Сделай фото на площадке Военного учебного центра"),
     },
 }
 
 # Краткая суть задания (показывается модераторам в карточке) и что принимаем в ответ:
-#   link — ссылка текстом, photo — картинка (скриншот), text — короткий текст
+#   story — скриншот истории ИЛИ ссылка на профиль, photo — только картинка (скриншот),
+#   text — короткий текст (вопрос про Ульянова)
 TASK_META = {
-    "1-2": ("История о Дне открытых дверей ЧувГУ, пост в ВК/Макс с #мывчувгу", "link"),
+    "1-2": ("История о Дне открытых дверей, #мывчувгу, показ 48 ч", "story"),
     "1-3": ("Кто такой Ульянов И.Н. (ответ тремя словами)", "text"),
-    "2-1": ("Фото с синим предметом, пост в ВК/Макс с #мывчувгу", "link"),
-    "2-2": ("Селфи с Ульяном, пост в ВК/Макс с #мывчувгу", "link"),
-    "2-3": ("Подписка на каналы ЧувГУ в ВК и MAX (скриншоты)", "photo"),
-    "3-1": ("Фото на площадках 3 факультетов, пост с #мывчувгу", "link"),
-    "3-2": ("Пост (ВК/Макс, #мывчувгу) о мероприятии в концертном зале Дворца ЧГУ", "link"),
-    "extra": ("Фото на площадке Военного учебного центра, пост с #мывчувгу", "link"),
+    "2-1": ("История: фото с синим предметом, #мывчувгу, показ 48 ч", "story"),
+    "2-2": ("История: селфи с Ульяном, #мывчувгу, показ 48 ч", "story"),
+    "2-3": ("Подписка на канал ЧувГУ в Макс (скриншот)", "photo"),
+    "3-1": ("История: фото на площадках 3 факультетов, #мывчувгу, показ 48 ч", "story"),
+    "3-2": ("История о мероприятии в концертном зале Дворца ЧГУ, #мывчувгу, показ 48 ч", "story"),
+    "extra": ("История: фото на площадке Военного учебного центра, #мывчувгу, показ 48 ч", "story"),
 }
 for _task_id, (_brief, _accept) in TASK_META.items():
     TASKS[_task_id]["brief"] = _brief
@@ -348,7 +326,7 @@ QUIZZES = {
         "points": 5,
         "questions": [
             {"text": "Сколько факультетов в ЧГУ?",
-             "options": ["12", "15", "18", "20"], "correct": 1},
+             "options": ["12", "15", "16", "18"], "correct": 2},
             {"text": "Кто является маскотом ЧувГУ?",
              "options": ["Волк", "Сова Ульян", "Лис"], "correct": 1},
         ],
@@ -360,6 +338,7 @@ QUIZZES = {
         "open": {
             "text": "Кто такой Ульянов И.Н., имя которого носит университет? "
                     "Напиши тремя словами",
+            "label": "Кто такой Ульянов И.Н., имя которого носит университет?",
             "points": 5,
         },
         "questions": [
@@ -705,17 +684,29 @@ def count_pending() -> int:
         return db.execute("SELECT COUNT(*) FROM submissions WHERE status = 'pending'").fetchone()[0]
 
 
-def create_quiz_result(user_id: int, task_id: str, points: int) -> bool:
-    """Результат викторины записывается сразу. Одна попытка: False, если запись уже есть."""
+def create_quiz_result(user_id: int, task_id: str, points: int, marks: str = "") -> bool:
+    """Результат викторины записывается сразу (marks — верно/неверно по вопросам: «10»).
+    Одна попытка: False, если запись уже есть."""
     status = "approved" if points > 0 else "rejected"
     with sqlite3.connect(DB_PATH) as db:
         cur = db.execute(
-            "INSERT INTO submissions (user_id, task_id, status, points, moderator, decided_at) "
-            "SELECT ?, ?, ?, ?, 'авто', datetime('now') "
+            "INSERT INTO submissions (user_id, task_id, content, status, points, moderator, decided_at) "
+            "SELECT ?, ?, ?, ?, ?, 'авто', datetime('now') "
             "WHERE NOT EXISTS (SELECT 1 FROM submissions WHERE user_id = ? AND task_id = ?)",
-            (user_id, task_id, status, points, user_id, task_id),
+            (user_id, task_id, marks, status, points, user_id, task_id),
         )
         return cur.rowcount > 0
+
+
+def get_quiz_marks(user_id: int, task_id: str) -> str:
+    """Отметки по вопросам с кнопками, например «10» = первый верно, второй неверно."""
+    part_id = f"{task_id}q" if QUIZZES[task_id].get("open") else task_id
+    with sqlite3.connect(DB_PATH) as db:
+        row = db.execute(
+            "SELECT content FROM submissions WHERE user_id = ? AND task_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id, part_id),
+        ).fetchone()
+    return (row[0] or "") if row else ""
 
 
 def decide_submission(sub_id: int, status: str, points: int, moderator: str) -> bool:
@@ -842,11 +833,11 @@ def pending_text(task_id: str) -> str:
     return f"{TASKS[task_id]['title']}\n\nСтатус: {STATUS_TEXT['pending']}"
 
 
-def quiz_keyboard(task_id: str, qi: int, score: int):
-    """Варианты ответа; в payload несём номер вопроса и набранные баллы (без состояния)."""
+def quiz_keyboard(task_id: str, qi: int, marks: str):
+    """Варианты ответа; в payload несём номер вопроса и отметки о прошлых ответах (без состояния)."""
     kb = InlineKeyboardBuilder()
     for i, option in enumerate(QUIZZES[task_id]["questions"][qi]["options"]):
-        kb.row(CallbackButton(text=option, payload=f"quiz:{task_id}:{qi}:{score}:{i}"))
+        kb.row(CallbackButton(text=option, payload=f"quiz:{task_id}:{qi}:{marks}:{i}"))
     kb.row(CallbackButton(text=BUTTON_BACK, payload="menu"))
     return kb.as_markup()
 
@@ -902,6 +893,20 @@ def can_submit(user_id: int, task_id: str) -> bool:
     return status not in ("pending", "approved")
 
 
+def quiz_breakdown(user_id: int, task_id: str, status: str) -> str:
+    """Что верно, а что нет — без подсказки правильных ответов."""
+    quiz = QUIZZES[task_id]
+    marks = get_quiz_marks(user_id, task_id)
+    lines = []
+    if quiz.get("open"):
+        icon = {"pending": "⏳", "approved": "✅", "rejected": "❌"}[status]
+        lines.append(f"{icon} {quiz['open']['label']}")
+    for i, question in enumerate(quiz["questions"]):
+        if i < len(marks):
+            lines.append(f"{'✅' if marks[i] == '1' else '❌'} {question['text']}")
+    return "\n".join(lines)
+
+
 def task_text(user_id: int, task_id: str) -> str:
     task = TASKS[task_id]
     text = f"{task['title']}\n\n{task['text']}"
@@ -909,15 +914,21 @@ def task_text(user_id: int, task_id: str) -> str:
     if not status:
         return text
 
-    if task_id in QUIZZES and status != "pending":
+    if task_id in QUIZZES:
         earned, total = quiz_earned(user_id, task_id), quiz_total(task_id)
-        if earned >= total:
+        if status == "pending":
+            line = STATUS_TEXT["pending"]
+        elif earned >= total:
             line = STATUS_TEXT["approved"]
         elif earned == 0:
             line = STATUS_TEXT["rejected"]
         else:
             line = "🔸 верно частично"
-        return f"{text}\n\nСтатус: {line}\nНачислено: {earned} из {total} б"
+        text += f"\n\nСтатус: {line}"
+        if status != "pending" or earned > 0:
+            text += f"\nНачислено: {earned} из {total} б"
+        breakdown = quiz_breakdown(user_id, task_id, status)
+        return f"{text}\n\n{breakdown}" if breakdown else text
 
     return f"{text}\n\nСтатус: {STATUS_TEXT[status]}"
 
@@ -1068,13 +1079,45 @@ async def edit_message_safe(mid: str | None, text: str, keyboard) -> bool:
         return False
 
 
-async def show_screen(user_id: int, text: str, keyboard, view: str, chat_id: int | None = None):
-    """Новое сообщение-панель внизу чата; предыдущее удаляется."""
+def image_attachment(*names: str):
+    """Картинка из папки images/ (png, jpg, jpeg, webp) — первая найденная из names, иначе None."""
+    for name in names:
+        for ext in (".png", ".jpg", ".jpeg", ".webp"):
+            path = IMAGES_DIR / f"{name}{ext}"
+            if path.exists():
+                from maxapi.types import InputMedia
+                return InputMedia(path=str(path))
+    return None
+
+
+def menu_image(user_id: int) -> str | None:
+    """Картинка «Выбирай задание!» — только пока задания открыты."""
+    return None if tasks_closed(user_id) else "menu"
+
+
+async def send_screen_message(text: str, keyboard=None, image=None, **target):
+    """Сообщение с необязательной картинкой (имя или несколько имён на выбор).
+    Нет файла или картинка не загрузилась — сообщение уходит без неё."""
+    names = (image,) if isinstance(image, str) else tuple(image or ())
+    picture = image_attachment(*names) if names else None
+    attachments = [a for a in (picture, keyboard) if a]
+    try:
+        return await bot.send_message(text=text, attachments=attachments or None, **target)
+    except Exception:
+        if not picture:
+            raise
+        logging.warning("Не удалось отправить картинку %s — шлю без неё", names, exc_info=True)
+        return await bot.send_message(
+            text=text, attachments=[keyboard] if keyboard else None, **target
+        )
+
+
+async def show_screen(user_id: int, text: str, keyboard, view: str,
+                      chat_id: int | None = None, image=None):
+    """Новое сообщение-панель внизу чата (с картинкой, если она есть); предыдущее удаляется."""
     old_mid, _ = get_panel(user_id)
     target = {"chat_id": chat_id} if chat_id else {"user_id": user_id}
-    sent = await bot.send_message(
-        text=text, attachments=[keyboard] if keyboard else None, **target
-    )
+    sent = await send_screen_message(text, keyboard, image, **target)
     new_mid = extract_mid(sent)
     set_panel(user_id, new_mid, view)
     if old_mid and old_mid != new_mid:
@@ -1120,15 +1163,14 @@ async def run_start_flow(chat_id: int, user_id: int, context: MemoryContext):
 
     # Уже зарегистрирован — просто показываем панель (без повторных правил)
     if is_registered(user_id):
-        await show_screen(user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id)
+        await show_screen(
+        user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
+        image=menu_image(user_id),
+    )
         return
 
     ensure_user(user_id)
-    attachments = None
-    if os.path.exists(PORTRAIT_PATH):
-        from maxapi.types import InputMedia
-        attachments = [InputMedia(path=PORTRAIT_PATH)]
-    await bot.send_message(chat_id=chat_id, text=TEXT_GREETING, attachments=attachments)
+    await send_screen_message(TEXT_GREETING, image="welcome", chat_id=chat_id)
 
     if has_consent(user_id):
         await show_screen(user_id, TEXT_ASK_FIO, None, "reg", chat_id)
@@ -1304,8 +1346,11 @@ async def on_phone(event: MessageCreated, context: MemoryContext):
     logging.info("Зарегистрирован: %s, %s", data["fio"], phone)
 
     await context.clear()
-    await bot.send_message(chat_id=chat_id, text=TEXT_MEDIABINGO)
-    await show_screen(user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id)
+    await send_screen_message(TEXT_MEDIABINGO, image="registered", chat_id=chat_id)
+    await show_screen(
+        user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
+        image=menu_image(user_id),
+    )
 # endregion
 
 
@@ -1358,7 +1403,7 @@ async def on_task(event: MessageCallback, context: MemoryContext):
         await event.message.edit(text=open_question_text(task_id), attachments=[back_keyboard()])
     elif quiz:
         track(event, user_id, "flow")
-        await event.message.edit(text=quiz_text(task_id, 0), attachments=[quiz_keyboard(task_id, 0, 0)])
+        await event.message.edit(text=quiz_text(task_id, 0), attachments=[quiz_keyboard(task_id, 0, "")])
         return
     else:
         track(event, user_id, f"task:{task_id}")
@@ -1374,8 +1419,8 @@ async def on_task(event: MessageCallback, context: MemoryContext):
 @dp.message_callback(F.callback.payload.startswith("quiz:"))
 async def on_quiz_answer(event: MessageCallback, context: MemoryContext):
     user_id = event.callback.user.user_id
-    _, task_id, qi, score, opt = event.callback.payload.split(":")
-    qi, score, opt = int(qi), int(score), int(opt)
+    _, task_id, qi, marks, opt = event.callback.payload.split(":")
+    qi, opt = int(qi), int(opt)
 
     quiz = QUIZZES.get(task_id)
     if not quiz:
@@ -1388,19 +1433,20 @@ async def on_quiz_answer(event: MessageCallback, context: MemoryContext):
         return
 
     questions = quiz["questions"]
-    if qi >= len(questions) or opt >= len(questions[qi]["options"]):
+    if qi >= len(questions) or opt >= len(questions[qi]["options"]) or len(marks) != qi:
         return
 
     track(event, user_id, "flow")
-    if opt == questions[qi]["correct"]:
-        score += quiz["points"]
+    marks += "1" if opt == questions[qi]["correct"] else "0"
 
     # Есть следующий вопрос
     if qi + 1 < len(questions):
         await event.message.edit(
-            text=quiz_text(task_id, qi + 1), attachments=[quiz_keyboard(task_id, qi + 1, score)]
+            text=quiz_text(task_id, qi + 1), attachments=[quiz_keyboard(task_id, qi + 1, marks)]
         )
         return
+
+    score = marks.count("1") * quiz["points"]
 
     # Последний вопрос. Если у задания есть открытый вопрос — берём ответ на него
     open_answer = None
@@ -1413,16 +1459,22 @@ async def on_quiz_answer(event: MessageCallback, context: MemoryContext):
     # Часть с кнопками — автоматически (для 1.3 пишется отдельной строкой «1-3q»)
     part_id = f"{task_id}q" if open_answer else task_id
     track(event, user_id, f"task:{task_id}")
-    if not create_quiz_result(user_id, part_id, score):
+    if not create_quiz_result(user_id, part_id, score, marks):
         await event.message.edit(text=task_text(user_id, task_id), attachments=[back_keyboard()])
         return
 
     sub_id = create_submission(user_id, task_id, open_answer) if open_answer else None
 
-    text = task_text(user_id, task_id)
-    if open_answer and score > 0:
-        text += f"\n\nНачислено: {score} б"   # часть с кнопками; остальное — после проверки
-    await event.message.edit(text=text, attachments=[back_keyboard()])
+    # Итог: новое сообщение с картинкой и разбором «что верно, что нет»
+    if open_answer:
+        image = "pending"
+    elif score >= quiz_total(task_id):
+        image = "quiz_full"
+    else:
+        image = "rejected" if score == 0 else "quiz_partial"
+    await show_screen(
+        user_id, task_text(user_id, task_id), back_keyboard(), f"task:{task_id}", image=image
+    )
     await context.clear()
 
     if sub_id:
@@ -1431,7 +1483,7 @@ async def on_quiz_answer(event: MessageCallback, context: MemoryContext):
 
 
 # region Приём ответов участников
-URL_RE = re.compile(r"(https?://|www\.|vk\.|max\.|t\.me/)\S+", re.IGNORECASE)
+URL_RE = re.compile(r"(https?://|www\.|max\.)\S+", re.IGNORECASE)
 
 
 def validate_answer(accept: str, text: str, attachments: list) -> str | None:
@@ -1440,10 +1492,12 @@ def validate_answer(accept: str, text: str, attachments: list) -> str | None:
         return TEXT_TOO_MANY_FILES
     if accept == "photo":
         return None if attachments else TEXT_BAD_PHOTO
-    # link: нужна ссылка текстом, ограниченной длины
-    if not text or len(text) > MAX_LINK_LEN or not URL_RE.search(text):
-        return TEXT_BAD_LINK
-    return None
+    # story: скриншот истории ИЛИ ссылка на профиль текстом
+    if attachments:
+        return None
+    if text and len(text) <= MAX_LINK_LEN and URL_RE.search(text):
+        return None
+    return TEXT_BAD_STORY
 
 
 @dp.message_created(Submit.waiting)
@@ -1484,12 +1538,12 @@ async def on_submission(event: MessageCreated, context: MemoryContext):
         await context.update_data(open_answer=text)
         await context.set_state(Submit.choosing)
         await show_screen(
-            user_id, quiz_text(task_id, 0), quiz_keyboard(task_id, 0, 0), "flow", chat_id
+            user_id, quiz_text(task_id, 0), quiz_keyboard(task_id, 0, ""), "flow", chat_id
         )
         return
 
     # Обычное задание: проверяем формат и размер
-    problem = validate_answer(TASKS[task_id].get("accept", "link"), text, attachments)
+    problem = validate_answer(TASKS[task_id].get("accept", "story"), text, attachments)
     if problem:
         await message.answer(problem)
         return
@@ -1500,7 +1554,9 @@ async def on_submission(event: MessageCreated, context: MemoryContext):
     await context.clear()
 
     # Подтверждение уходит вместе с панелью — панель остаётся последним сообщением
-    await show_screen(user_id, pending_text(task_id), panel_keyboard(user_id), "menu", chat_id)
+    await show_screen(
+        user_id, pending_text(task_id), panel_keyboard(user_id), "menu", chat_id, image="pending"
+    )
     await send_to_moderation(sub_id)
 # endregion
 
@@ -1592,13 +1648,14 @@ async def on_moderation(event: MessageCallback):
         if approved:
             template = TEXT_CONGRATS_SHORT if tasks_closed(user_id) else TEXT_CONGRATS
             await show_screen(user_id, template.format(points=points),
-                              panel_keyboard(user_id), "notice")
+                              panel_keyboard(user_id), "notice",
+                              image=(f"approved_{points}", "approved"))
             return
         if task_id not in QUIZZES:
             text = TEXT_REJECTED.format(short=TASKS[task_id]["short"])
             if not tasks_closed(user_id):
                 text += f"\n{TEXT_REJECTED_RETRY}"
-            await show_screen(user_id, text, panel_keyboard(user_id), "notice")
+            await show_screen(user_id, text, panel_keyboard(user_id), "notice", image="rejected")
             return
     await refresh_panel(user_id)
 # endregion
@@ -1762,10 +1819,12 @@ async def send_broadcast_item(item: dict, user_id: int):
     """Рассылка. Для «thanks» кнопки (витрина скоро + профиль) идут прямо под сообщением,
     отдельная панель не отправляется. Для «exchange» ниже идёт экран витрины."""
     if item.get("then") == "shop":
-        await bot.send_message(user_id=user_id, text=item["text"])
+        await send_screen_message(item["text"], image="gift", user_id=user_id)
         await show_screen(user_id, shop_text(user_id), shop_keyboard(), "shop")
     else:
-        await show_screen(user_id, item["text"], closed_panel_keyboard(user_id), "menu")
+        await show_screen(
+            user_id, item["text"], closed_panel_keyboard(user_id), "menu", image="thanks"
+        )
 
 
 async def run_broadcast(item: dict):
@@ -1824,7 +1883,10 @@ async def on_any_message(event: MessageCreated):
     user_id = event.message.sender.user_id
     if not is_registered(user_id) or too_fast(user_id):
         return
-    await show_screen(user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id)
+    await show_screen(
+        user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
+        image=menu_image(user_id),
+    )
 # endregion
 
 
