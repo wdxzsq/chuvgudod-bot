@@ -4,7 +4,19 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="fac80787-21fb-43c8-bde1-0d895fb5975c" name="Changes" comment="" />
+    <list default="true" id="fac80787-21fb-43c8-bde1-0d895fb5975c" name="Changes" comment="q">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/approved_15.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/approved_15.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/gift.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/gift.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/menu.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/menu.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/pending.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/pending.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/quiz_full.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/quiz_full.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/quiz_partial.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/quiz_partial.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/registered.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/registered.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/rejected.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/rejected.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/images/thanks.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/thanks.jpg" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -12,6 +24,20 @@
   </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;wdxzsq&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">
+    <option name="selectedUrlAndAccountId">
+      <UrlAndAccount>
+        <option name="accountId" value="a360c5b8-d0e0-420b-9fe7-bf13576605ae" />
+        <option name="url" value="https://github.com/wdxzsq/chuvgudod-bot.git" />
+      </UrlAndAccount>
+    </option>
   </component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 0
@@ -79,6 +105,55 @@
       <option name="presentableId" value="Default" />
       <updated>1793973853168</updated>
     </task>
+    <task id="LOCAL-00001" summary="q">
+      <option name="closed" value="true" />
+      <created>1794152408798</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1794152408798</updated>
+    </task>
+    <task id="LOCAL-00002" summary="q">
+      <option name="closed" value="true" />
+      <created>1794171482838</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1794171482838</updated>
+    </task>
+    <task id="LOCAL-00003" summary="q">
+      <option name="closed" value="true" />
+      <created>1794205446381</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1794205446381</updated>
+    </task>
+    <task id="LOCAL-00004" summary="q">
+      <option name="closed" value="true" />
+      <created>1794220831737</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1794220831737</updated>
+    </task>
+    <task id="LOCAL-00005" summary="q">
+      <option name="closed" value="true" />
+      <created>1794240086891</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1794240086891</updated>
+    </task>
+    <task id="LOCAL-00006" summary="q">
+      <option name="closed" value="true" />
+      <created>1794256203096</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1794256203096</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -91,5 +166,9 @@
         </entry>
       </map>
     </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="q" />
+    <option name="LAST_COMMIT_MESSAGE" value="q" />
   </component>
 </project>
