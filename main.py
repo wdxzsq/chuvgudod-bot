@@ -1211,6 +1211,8 @@ async def refresh_panel(user_id: int):
     if view in ("menu", "notice"):
         # меню — новым сообщением, чтобы вернулась картинка
         await show_screen(user_id, rendered[0], rendered[1], "menu", image=panel_image(user_id))
+    elif view == "profile":
+        await show_screen(user_id, rendered[0], rendered[1], "profile", image="approved")
     elif mid:
         await edit_message_safe(mid, *rendered)
 # endregion
@@ -1264,7 +1266,7 @@ async def on_profile_command(event: MessageCreated):
         return
     await show_screen(
         user_id, TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard(),
-        "profile", event.message.recipient.chat_id,
+        "profile", event.message.recipient.chat_id, image="approved",
     )
 # endregion
 
@@ -1526,9 +1528,10 @@ async def on_menu(event: MessageCallback, context: MemoryContext):
 async def on_profile_button(event: MessageCallback, context: MemoryContext):
     await context.clear()
     user_id = event.callback.user.user_id
-    track(event, user_id, "profile")
-    await event.message.edit(
-        text=TEXT_PROFILE.format(points=get_balance(user_id)), attachments=[back_keyboard()]
+    track(event, user_id, "profile")   # чтобы это сообщение удалилось при показе нового
+    await show_screen(
+        user_id, TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard(), "profile",
+        image="approved",
     )
 
 
