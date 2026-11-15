@@ -119,6 +119,9 @@ MAX_FIO_LEN = 100            # ФИО
 MAX_LINK_LEN = 500           # ответ-ссылка / подпись к фото
 MAX_OPEN_ANSWER_LEN = 100    # открытый вопрос «тремя словами»
 MAX_ATTACHMENTS = 5          # файлов в одном ответе
+MAX_QUESTION_LEN = 1000      # вопрос организаторам
+QUESTIONS_PER_HOUR = 5       # не больше вопросов в час от одного участника
+MAX_ANNOUNCE_LEN = 3500      # своя рассылка из чата админов
 FALLBACK_COOLDOWN = 3        # сек: не чаще одного «возврата панели» на пользователя
 
 # Рассылки по расписанию
@@ -247,6 +250,14 @@ TEXT_CONGRATS = (
 )
 # После закрытия заданий «впереди ещё задания» уже неверно — короткий вариант
 TEXT_CONGRATS_SHORT = "Поздравляю! Ты получил {points} баллов за выполнение задания Медиабинго!"
+
+# --- Вопросы организаторам (тексты-заглушки — поменяйте под себя) ---
+BUTTON_ASK = "❓ Задать вопрос"
+TEXT_ASK_QUESTION = "Напиши свой вопрос одним сообщением — организаторы ответят прямо здесь."
+TEXT_QUESTION_SENT = "✅ Вопрос отправлен. Ответ придёт в этот чат."
+TEXT_QUESTION_TOO_LONG = "Слишком длинный вопрос — сократи, пожалуйста, до 1000 символов."
+TEXT_QUESTION_LIMIT = "Ты задал много вопросов подряд. Попробуй чуть позже."
+TEXT_ANSWER = "💬 Ответ организаторов:\n\n{text}"
 # endregion
 
 
@@ -472,6 +483,28 @@ def db_init():
             "price INTEGER NOT NULL, "
             "created_at TEXT DEFAULT (datetime('now')))"
         )
+        # Вопросы участников организаторам
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS questions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "user_id INTEGER NOT NULL, "
+            "text TEXT, "
+            "src_mid TEXT, "                 # вложения участника (для пересылки)
+            "card_mid TEXT, "                # карточка в чате админов (на неё отвечают)
+            "answered INTEGER NOT NULL DEFAULT 0, "
+            "answer TEXT, "
+            "answered_by TEXT, "
+            "created_at TEXT DEFAULT (datetime('now')))"
+        )
+        # Свои рассылки из чата админов
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS announcements ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "text TEXT NOT NULL, "
+            "status TEXT NOT NULL DEFAULT 'draft', "   # draft / sending / done / cancelled
+            "created_by TEXT, "
+            "created_at TEXT DEFAULT (datetime('now')))"
+        )
         # Рассылки по расписанию: кому уже отправлено (user_id = 0 — отметка «рассылка завершена»)
         db.execute(
             "CREATE TABLE IF NOT EXISTS broadcast_log ("
@@ -543,10 +576,90 @@ def mark_broadcast_done(broadcast_id: str):
         )
 
 
+# --- вопросы организаторам и свои рассылки ---
+def create_question(user_id: int, text: str, src_mid: str | None) -> int:
+    with sqlite3.connect(DB_PATH) as db:
+        cur = db.execute(
+            "INSERT INTO questions (user_id, text, src_mid) VALUES (?, ?, ?)", (user_id, text, src_mid)
+        )
+        return cur.lastrowid
+
+
+def set_question_card(qid: int, card_mid: str | None):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("UPDATE questions SET card_mid = ? WHERE id = ?", (card_mid, qid))
+
+
+def get_question(qid: int):
+    """-> (id, user_id, text, src_mid, card_mid, answered) или None"""
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute(
+            "SELECT id, user_id, text, src_mid, card_mid, answered FROM questions WHERE id = ?", (qid,)
+        ).fetchone()
+
+
+def get_question_by_card(card_mid: str):
+    with sqlite3.connect(DB_PATH) as db:
+        row = db.execute("SELECT id FROM questions WHERE card_mid = ?", (card_mid,)).fetchone()
+    return get_question(row[0]) if row else None
+
+
+def mark_answered(qid: int, answer: str, by: str):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "UPDATE questions SET answered = 1, answer = ?, answered_by = ? WHERE id = ?",
+            (answer, by, qid),
+        )
+
+
+def count_recent_questions(user_id: int, minutes: int = 60) -> int:
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute(
+            "SELECT COUNT(*) FROM questions WHERE user_id = ? AND created_at >= datetime('now', ?)",
+            (user_id, f"-{minutes} minutes"),
+        ).fetchone()[0]
+
+
+def list_unanswered(limit: int):
+    """-> [(id, user_id, text), ...] — вопросы без ответа, старые первыми."""
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute(
+            "SELECT id, user_id, text FROM questions WHERE answered = 0 ORDER BY id LIMIT ?", (limit,)
+        ).fetchall()
+
+
+def count_unanswered() -> int:
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute("SELECT COUNT(*) FROM questions WHERE answered = 0").fetchone()[0]
+
+
+def create_announcement(text: str, by: str) -> int:
+    with sqlite3.connect(DB_PATH) as db:
+        cur = db.execute("INSERT INTO announcements (text, created_by) VALUES (?, ?)", (text, by))
+        return cur.lastrowid
+
+
+def get_announcement(ann_id: int):
+    """-> (id, text, status) или None"""
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute(
+            "SELECT id, text, status FROM announcements WHERE id = ?", (ann_id,)
+        ).fetchone()
+
+
+def set_announcement_status(ann_id: int, old: str, new: str) -> bool:
+    """Смена статуса только из ожидаемого (защита от двойного нажатия)."""
+    with sqlite3.connect(DB_PATH) as db:
+        cur = db.execute(
+            "UPDATE announcements SET status = ? WHERE id = ? AND status = ?", (new, ann_id, old)
+        )
+        return cur.rowcount > 0
+
+
 def delete_user_data(user_id: int):
     """Удаляет все данные одного участника (для проверки регистрации заново)."""
     with sqlite3.connect(DB_PATH) as db:
-        for table in ("submissions", "orders", "broadcast_log", "users"):
+        for table in ("submissions", "orders", "questions", "broadcast_log", "users"):
             db.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
 
 
@@ -811,6 +924,10 @@ class Registration(StatesGroup):
     phone = State()
 
 
+class Ask(StatesGroup):
+    waiting = State()   # человек пишет вопрос организаторам
+
+
 class Submit(StatesGroup):
     waiting = State()   # участник открыл задание и ждём его ответ
     choosing = State()  # ответил на открытый вопрос, выбирает вариант кнопкой
@@ -895,6 +1012,21 @@ def panel_keyboard(user_id: int):
         CallbackButton(text=BUTTON_PROFILE, payload="profile"),
         CallbackButton(text=BUTTON_RULES, payload="rules"),
     )
+    return kb.as_markup()
+
+
+def profile_keyboard():
+    """Экран «Мои баллы»: здесь (и только здесь) есть кнопка «Задать вопрос»."""
+    kb = InlineKeyboardBuilder()
+    kb.row(CallbackButton(text=BUTTON_ASK, payload="ask"))
+    kb.row(CallbackButton(text=BUTTON_BACK, payload="menu"))
+    return kb.as_markup()
+
+
+def home_keyboard():
+    """«Назад» с экрана вопроса — на главный экран своего этапа."""
+    kb = InlineKeyboardBuilder()
+    kb.row(CallbackButton(text=BUTTON_BACK, payload="home"))
     return kb.as_markup()
 
 
@@ -1235,7 +1367,7 @@ def render_view(user_id: int, view: str | None):
     if view in ("menu", "notice"):
         return panel_text(user_id), panel_keyboard(user_id)
     if view == "profile":
-        return TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard()
+        return TEXT_PROFILE.format(points=get_balance(user_id)), profile_keyboard()
     if view == "rules":
         return TEXT_MEDIABINGO, back_keyboard()
     if view == "shop":
@@ -1312,7 +1444,7 @@ async def on_profile_command(event: MessageCreated):
     if too_fast(user_id):
         return
     await show_screen(
-        user_id, TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard(),
+        user_id, TEXT_PROFILE.format(points=get_balance(user_id)), profile_keyboard(),
         "profile", event.message.recipient.chat_id, image="approved",
     )
 # endregion
@@ -1428,6 +1560,7 @@ async def on_status(event: MessageCreated):
         f"📊 Статус на {now:%d.%m %H:%M} (МСК)",
         f"Зарегистрировано: {count_registered()}",
         f"Ожидают проверки: {count_pending()}",
+        f"Вопросов без ответа: {count_unanswered()}",
         f"Приём заданий: {'закрыт' if tasks_closed() else 'открыт'}",
         f"Витрина: {'открыта' if shop_open() else 'закрыта'}",
     ]
@@ -1438,6 +1571,153 @@ async def on_status(event: MessageCreated):
     count, total = orders_summary()
     lines.append(f"Покупок: {count} на {total} б")
     await event.message.answer("\n".join(lines))
+
+
+def _replied_mid(message) -> str | None:
+    """id сообщения, на которое ответили (reply), если это ответ."""
+    link = getattr(message, "link", None)
+    if not link:
+        return None
+    link_type = getattr(link, "type", "")
+    if str(getattr(link_type, "value", link_type)) != "reply":
+        return None
+    return getattr(getattr(link, "message", None), "mid", None)
+
+
+async def _deliver_answer(event: MessageCreated, qid: int, text: str):
+    result = await relay_answer(qid, text, display_name(event.message.sender))
+    if result == "missing":
+        await event.message.answer(f"Вопрос #{qid} не найден.")
+    elif result == "failed":
+        await event.message.answer(f"Не удалось доставить ответ на вопрос #{qid} (участник мог заблокировать бота).")
+    # при успехе карточка вопроса обновляется сама
+
+
+# Ответ модератора: «ответить» (reply) на карточку вопроса — текст уйдёт этому участнику.
+# Реагирует только на ответы в чате админов; на всё остальное не влияет.
+@dp.message_created(F.message.link, F.message.recipient.chat_id == ADMIN_CHAT_ID)
+async def on_admin_reply(event: MessageCreated):
+    mid = _replied_mid(event.message)
+    question = get_question_by_card(mid) if mid else None
+    text = (event.message.body.text or "").strip()
+    if question and text:
+        await _deliver_answer(event, question[0], text)
+
+
+# «/reply 12 текст ответа» — то же без «ответить»
+@dp.message_created(Command("reply"))
+async def on_reply_command(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    parts = (event.message.body.text or "").split(maxsplit=2)
+    number = parts[1].lstrip("#№") if len(parts) > 1 else ""
+    if not number.isdigit() or len(parts) < 3 or not parts[2].strip():
+        await event.message.answer("Использование: /reply 12 текст ответа")
+        return
+    await _deliver_answer(event, int(number), parts[2].strip())
+
+
+# «/questions» — вопросы без ответа
+@dp.message_created(Command("questions"))
+async def on_questions_command(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    rows = list_unanswered(10)
+    if not rows:
+        await event.message.answer("Вопросов без ответа нет ✅")
+        return
+    lines = [f"❓ Без ответа: {count_unanswered()} (показаны первые {len(rows)})"]
+    for qid, user_id, text in rows:
+        fio, _ = get_user_info(user_id)
+        lines.append(f"#{qid} · {fio or user_id}: {text[:80]}")
+    lines.append("\nОтветить: /reply N текст — или «ответить» на карточку вопроса")
+    await event.message.answer("\n".join(lines))
+
+
+# «/announce текст» — своя рассылка всем зарегистрированным. Сначала черновик с кнопками.
+@dp.message_created(Command("announce"))
+async def on_announce(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    parts = (event.message.body.text or "").split(maxsplit=1)
+    body = parts[1].strip() if len(parts) > 1 else ""
+    if not body:
+        await event.message.answer("Использование: /announce текст сообщения для всех участников")
+        return
+    if len(body) > MAX_ANNOUNCE_LEN:
+        await event.message.answer(f"Слишком длинно: {len(body)} символов, можно до {MAX_ANNOUNCE_LEN}.")
+        return
+
+    ann_id = create_announcement(body, display_name(event.message.sender))
+    total = count_registered()
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        CallbackButton(text=f"✅ Отправить ({total})", payload=f"ann:{ann_id}:go"),
+        CallbackButton(text="❌ Отмена", payload=f"ann:{ann_id}:cancel"),
+    )
+    await event.message.answer(
+        f"📢 Черновик рассылки #{ann_id}\nПолучателей: {total}\n\n{body}", attachments=[kb.as_markup()]
+    )
+
+
+@dp.message_callback(F.callback.payload.startswith("ann:"))
+async def on_announce_action(event: MessageCallback):
+    if ADMIN_CHAT_ID and event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    moderator = event.callback.user
+    if ADMIN_IDS and moderator.user_id not in ADMIN_IDS:
+        await event.answer(notification="Нет прав")
+        return
+
+    _, ann_id, action = event.callback.payload.split(":")
+    ann_id = int(ann_id)
+    name = display_name(moderator)
+    card = event.message.body.text or ""
+
+    if action == "cancel":
+        if set_announcement_status(ann_id, "draft", "cancelled"):
+            await event.message.edit(text=f"{card}\n\n❌ Отменено — {name}", attachments=[])
+        else:
+            await event.answer(notification="Уже обработано")
+        return
+
+    if not set_announcement_status(ann_id, "draft", "sending"):
+        await event.answer(notification="Уже обработано")
+        return
+    await event.message.edit(text=f"{card}\n\n⏳ Отправляется — {name}", attachments=[])
+    task = asyncio.create_task(run_announcement(ann_id))   # в фоне: вебхуку нужно ответить быстро
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
+async def run_announcement(ann_id: int):
+    ann = get_announcement(ann_id)
+    if not ann:
+        return
+    key = f"ann{ann_id}"
+    ok = failed = 0
+    for user_id in unsent_users(key):
+        try:
+            await bot.send_message(user_id=user_id, text=ann[1])
+            ok += 1
+            try:
+                await reshow_home_if_idle(user_id)   # панель остаётся последним сообщением
+            except Exception:
+                logging.warning("Не удалось вернуть панель %s", user_id, exc_info=True)
+        except Exception:
+            failed += 1
+            logging.exception("Рассылка #%s: не доставлено %s", ann_id, user_id)
+        mark_sent(key, user_id)
+        await asyncio.sleep(0.05)
+    mark_broadcast_done(key)
+    set_announcement_status(ann_id, "sending", "done")
+    summary = f"📢 Рассылка #{ann_id}: отправлено {ok}, ошибок {failed}"
+    logging.info(summary)
+    if ADMIN_CHAT_ID:
+        try:
+            await bot.send_message(chat_id=ADMIN_CHAT_ID, text=summary)
+        except Exception:
+            logging.exception("Не удалось отправить итог рассылки")
 
 
 # «/resetme» — удалить ВАШИ данные (регистрацию, ответы, покупки), чтобы пройти всё заново.
@@ -1577,7 +1857,7 @@ async def on_profile_button(event: MessageCallback, context: MemoryContext):
     user_id = event.callback.user.user_id
     track(event, user_id, "profile")   # чтобы это сообщение удалилось при показе нового
     await show_screen(
-        user_id, TEXT_PROFILE.format(points=get_balance(user_id)), back_keyboard(), "profile",
+        user_id, TEXT_PROFILE.format(points=get_balance(user_id)), profile_keyboard(), "profile",
         image="approved",
     )
 
@@ -1767,6 +2047,119 @@ async def on_submission(event: MessageCreated, context: MemoryContext):
         user_id, pending_text(task_id), panel_keyboard(user_id), "menu", chat_id, image="pending"
     )
     await send_to_moderation(sub_id)
+# endregion
+
+
+# region Вопросы организаторам (сторона участника)
+IDLE_VIEWS = ("menu", "notice", "profile", "rules", "shop", "orders")   # экраны, которые можно заменить
+
+
+async def show_home(user_id: int, chat_id: int | None = None):
+    """Главный экран по этапу: задания (до рассылок) / ожидание витрины / витрина."""
+    if shop_open(user_id):
+        await show_screen(user_id, shop_text(user_id), shop_keyboard(), "shop", chat_id)
+    else:
+        await show_screen(
+            user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
+            image=panel_image(user_id),
+        )
+
+
+async def reshow_home_if_idle(user_id: int):
+    """После сообщения организаторов возвращаем панель вниз, если человек сейчас не вводит ответ."""
+    _, view = get_panel(user_id)
+    if view in IDLE_VIEWS:
+        await show_home(user_id)
+
+
+def question_card_text(qid: int, user_id: int, text: str, answer: tuple[str, str] | None = None) -> str:
+    fio, phone = get_user_info(user_id)
+    card = (
+        f"❓ Вопрос #{qid}\n"
+        f"Участник: {fio or '—'}\n"
+        f"Телефон: {phone or '—'}\n"
+        f"ID: {user_id}\n\n{text}"
+    )
+    if answer:
+        return f"{card}\n\n✅ Ответ ({answer[1]}): {answer[0]}"
+    return f"{card}\n\n↩️ Ответьте на это сообщение (reply) — ответ уйдёт участнику. Или: /reply {qid} текст"
+
+
+async def send_question_to_admins(qid: int):
+    if not ADMIN_CHAT_ID:
+        logging.warning("ADMIN_CHAT_ID не задан — вопрос #%s не ушёл в чат модераторов", qid)
+        return
+    _, user_id, text, src_mid, _, _ = get_question(qid)
+    if src_mid:   # вложения участника — «голой» пересылкой, затем карточка
+        try:
+            await bot.send_message(chat_id=ADMIN_CHAT_ID, link=NewMessageLink(type="forward", mid=src_mid))
+        except Exception:
+            logging.exception("Не удалось переслать вложения к вопросу #%s", qid)
+    sent = await bot.send_message(chat_id=ADMIN_CHAT_ID, text=question_card_text(qid, user_id, text))
+    set_question_card(qid, extract_mid(sent))
+
+
+async def relay_answer(qid: int, answer_text: str, by: str) -> str:
+    """Отправляет ответ организатора участнику. -> 'ok' | 'missing' | 'failed'"""
+    question = get_question(qid)
+    if not question:
+        return "missing"
+    _, user_id, text, _, card_mid, _ = question
+    try:
+        await bot.send_message(user_id=user_id, text=TEXT_ANSWER.format(text=answer_text))
+    except Exception:
+        logging.exception("Не удалось доставить ответ на вопрос #%s", qid)
+        return "failed"
+    mark_answered(qid, answer_text, by)
+    await edit_message_safe(card_mid, question_card_text(qid, user_id, text, (answer_text, by)), None)
+    try:
+        await reshow_home_if_idle(user_id)
+    except Exception:
+        logging.warning("Не удалось вернуть панель после ответа", exc_info=True)
+    return "ok"
+
+
+@dp.message_callback(F.callback.payload == "ask")
+async def on_ask(event: MessageCallback, context: MemoryContext):
+    """Кнопка «Задать вопрос» (есть только на экране «Мои баллы»)."""
+    user_id = event.callback.user.user_id
+    await context.clear()
+    await context.set_state(Ask.waiting)
+    track(event, user_id, "flow")   # чтобы экран «Мои баллы» удалился при показе нового
+    await show_screen(user_id, TEXT_ASK_QUESTION, home_keyboard(), "flow", image="ask")
+
+
+@dp.message_callback(F.callback.payload == "home")
+async def on_home(event: MessageCallback, context: MemoryContext):
+    """«Назад» с экрана вопроса: на главный экран своего этапа."""
+    user_id = event.callback.user.user_id
+    await context.clear()
+    track(event, user_id, "menu")   # чтобы это сообщение удалилось при показе нового
+    await show_home(user_id)
+
+
+@dp.message_created(Ask.waiting)
+async def on_question(event: MessageCreated, context: MemoryContext):
+    message = event.message
+    chat_id = message.recipient.chat_id
+    user_id = message.sender.user_id
+    text = (message.body.text or "").strip()
+    attachments = message.body.attachments or []
+    if not text and not attachments:
+        return
+    if len(text) > MAX_QUESTION_LEN:
+        await message.answer(TEXT_QUESTION_TOO_LONG)
+        return
+
+    await context.clear()
+    if count_recent_questions(user_id) >= QUESTIONS_PER_HOUR:
+        await message.answer(TEXT_QUESTION_LIMIT)
+    else:
+        qid = create_question(user_id, text or "(без текста, см. вложение)",
+                              message.body.mid if attachments else None)
+        await send_question_to_admins(qid)
+        await message.answer(TEXT_QUESTION_SENT)
+    await show_home(user_id, chat_id)
 # endregion
 
 
