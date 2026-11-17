@@ -10,6 +10,9 @@
 
 Для хостинга с вебхуками — main2.py. Логика у файлов одна и та же,
 отличается только блок «Запуск» внизу.
+
+Блоки помечены # region / # endregion — их можно сворачивать
+(PyCharm и VS Code поддерживают это из коробки).
 """
 
 # region Импорты
@@ -120,7 +123,9 @@ TEXT_MEDIABINGO = (
     "— ❌ условия не соблюдены, задание не зачтено\n"
     "— ✅ всё супер, задание выполнено правильно\n\n"
     "Создавай смело — впереди много классного!\n\n"
-    "На заработанные баллы сможешь купить много разного мерча университета."
+    "На заработанные баллы сможешь купить много разного мерча университета. "
+    "Обмен откроется в {shop_time}, а посмотреть, что и сколько стоит, можно уже сейчас — "
+    "на витрине (кнопка «🎁 Витрина» в меню)."
 )
 
 TEXT_PROFILE = (
@@ -144,7 +149,6 @@ BUTTON_CONSENT = "✅ Согласен(на)"
 BUTTON_SHARE_PHONE = "📱 Поделиться номером"
 BUTTON_PROFILE = "📊 Мои баллы"
 BUTTON_BACK = "⬅️ Назад"
-TEXT_BAD_STORY = "Пришли скриншот истории или ссылку на свой профиль (текстом, не длиннее 500 символов)."
 TEXT_BAD_PHOTO = "Пришли скриншот картинкой."
 TEXT_TOO_MANY_FILES = "Слишком много файлов — отправь не больше 5."
 TEXT_BAD_OPEN = "Ответь коротко — тремя словами (не длиннее 100 символов)."
@@ -169,8 +173,6 @@ TEXT_BROADCAST_EXCHANGE = (
 
 # --- Витрина, закрытие заданий, поздравления (тексты-заглушки — поменяйте под себя) ---
 TEXT_TASKS_CLOSED = "Приём ответов завершён."
-BUTTON_WAIT_SHOP = "⏳ Витрина скоро появится"
-TEXT_WAIT_SHOP = "Витрина откроется в {time}"
 BUTTON_SHOP = "🎁 Витрина"
 BUTTON_ORDERS = "🧾 Мои покупки"
 BUTTON_CONFIRM = "✅ Оплатить"
@@ -182,6 +184,13 @@ TEXT_SHOP = (
     "{lots}\n\n"
     "Выбери подарок:"
 )
+TEXT_SHOP_PREVIEW = (
+    "🎁 Витрина\n\n"
+    "Покупки откроются в {time}. А пока можно посмотреть, что и сколько стоит.\n\n"
+    "Твои баллы: {balance}\n\n"
+    "{lots}"
+)
+TEXT_SOLD_OUT = "Этот подарок закончился."
 TEXT_CONFIRM = "Оплатить «{name}» — {price} б?\n\nТвои баллы: {balance} → останется {left}"
 TEXT_NO_POINTS = "Не хватает баллов: нужно {price}, у тебя {balance}."
 TEXT_LIMIT = "Можно выбрать не более {max} позиций."
@@ -219,14 +228,13 @@ TAIL = "После проверки модераторами, тебе буду�
 
 
 def story_task(points: int, action: str) -> str:
-    """Задание «выложи историю в Макс» — одни и те же 4 шага для всех.
-    Ссылку на отдельную историю в Макс создать нельзя, поэтому принимаем скриншот
-    или ссылку на профиль (тогда история должна быть открыта для всех)."""
+    """Задание «выложи историю в Макс» — одни и те же короткие шаги для всех.
+    Принимается только скриншот истории (ссылку на историю в Макс создать нельзя)."""
     return (
         f"{points} б. –\n"
-        f"1. {action}. Выложи в историю в Макс с хештегом #мывчувгу\n"
-        "2. Поставь показ на 48 часов и открой историю для всех\n"
-        "3. Пришли в бот скриншот истории или ссылку на свой профиль\n"
+        f"1. {action}\n"
+        "2. Выложи в историю в Макс с хештегом #мывчувгу\n"
+        "3. Пришли в бот скриншот истории\n"
         f"4. {TAIL}"
     )
 
@@ -248,9 +256,7 @@ TASKS = {
     "1-2": {
         "short": "1.2", "icon": "🟩", "points": [10],
         "title": "1 уровень · Задание 2",
-        "text": story_task(
-            10, "Сними историю о том, как проходит День открытых дверей ЧувГУ — покажи атмосферу"
-        ),
+        "text": story_task(10, "Сними историю про атмосферу Дня открытых дверей"),
     },
     "1-3": {
         "short": "1.3", "icon": "🟩", "points": [5],   # модератор оценивает только вопрос про Ульянова
@@ -290,15 +296,14 @@ TASKS = {
     "3-1": {
         "short": "3.1", "icon": "🟥", "points": [30],
         "title": "3 уровень · Задание 1",
-        "text": story_task(30, "Сделай фото, где ты на площадках 3 факультетов"),
+        "text": story_task(30, "Сделай фото на площадках 3 факультетов"),
     },
     "3-2": {
         "short": "3.2", "icon": "🟥", "points": [30],
         "title": "3 уровень · Задание 2",
         "text": story_task(
-            30,
-            "Посети официальное мероприятие в концертном зале Дворца ЧувГУ и поделись инсайтом "
-            "или расскажи, почему нужно правильно выбирать вуз для поступления",
+            30, "Посети мероприятие в концертном зале Дворца ЧувГУ и расскажи в истории, "
+                "почему важно правильно выбирать вуз"
         ),
     },
     "extra": {
@@ -308,22 +313,19 @@ TASKS = {
     },
 }
 
-# Краткая суть задания (показывается модераторам в карточке) и что принимаем в ответ:
-#   story — скриншот истории ИЛИ ссылка на профиль, photo — только картинка (скриншот),
-#   text — короткий текст (вопрос про Ульянова)
+# Краткая суть задания — показывается модераторам в карточке
 TASK_META = {
-    "1-2": ("История о Дне открытых дверей, #мывчувгу, показ 48 ч", "story"),
-    "1-3": ("Кто такой Ульянов И.Н. (ответ тремя словами)", "text"),
-    "2-1": ("История: фото с синим предметом, #мывчувгу, показ 48 ч", "story"),
-    "2-2": ("История: селфи с Ульяном, #мывчувгу, показ 48 ч", "story"),
-    "2-3": ("Подписка на канал ЧувГУ в Макс (скриншот)", "photo"),
-    "3-1": ("История: фото на площадках 3 факультетов, #мывчувгу, показ 48 ч", "story"),
-    "3-2": ("История о мероприятии в концертном зале Дворца ЧувГУ, #мывчувгу, показ 48 ч", "story"),
-    "extra": ("История: фото на площадке Военного учебного центра, #мывчувгу, показ 48 ч", "story"),
+    "1-2": "История о Дне открытых дверей, #мывчувгу (скриншот)",
+    "1-3": "Кто такой Ульянов И.Н. (ответ тремя словами)",
+    "2-1": "История: фото с синим предметом, #мывчувгу (скриншот)",
+    "2-2": "История: селфи с Ульяном, #мывчувгу (скриншот)",
+    "2-3": "Подписка на канал ЧувГУ в Макс (скриншот)",
+    "3-1": "История: фото на площадках 3 факультетов, #мывчувгу (скриншот)",
+    "3-2": "История о мероприятии в концертном зале Дворца ЧувГУ, #мывчувгу (скриншот)",
+    "extra": "История: фото на площадке Военного учебного центра, #мывчувгу (скриншот)",
 }
-for _task_id, (_brief, _accept) in TASK_META.items():
+for _task_id, _brief in TASK_META.items():
     TASKS[_task_id]["brief"] = _brief
-    TASKS[_task_id]["accept"] = _accept
 
 # Викторины. Вопросы с кнопками проверяются автоматически, на модерацию не уходят.
 #   points  — баллы за один верный ответ
@@ -339,7 +341,7 @@ QUIZZES = {
             {"text": "Сколько факультетов в ЧувГУ?",
              "options": ["12", "15", "16", "18"], "correct": 2},
             {"text": "Кто является маскотом ЧувГУ?",
-             "options": ["Волк", "Сова Ульян", "Лис"], "correct": 1},
+             "options": ["Волк Гром", "Сова Ульян", "Лис Рыжик"], "correct": 1},
         ],
     },
     "1-3": {
@@ -397,6 +399,9 @@ LOTS = [
     {"id": "tshirt", "name": "Футболка", "price": 175},
     {"id": "backpack", "name": "Рюкзак", "price": 185},
 ]
+DEFAULT_STOCK = 500   # пока по 500 штук каждого; впишите реальные остатки в "stock" нужных подарков
+for _lot in LOTS:
+    _lot.setdefault("stock", DEFAULT_STOCK)
 LOTS_BY_ID = {lot["id"]: lot for lot in LOTS}
 # endregion
 
@@ -694,9 +699,9 @@ def count_orders(user_id: int) -> int:
     return row[0]
 
 
-def create_order(user_id: int, lot_id: str, price: int):
-    """Бронь одной транзакцией: баллы и лимит позиций проверяются атомарно.
-    -> ('ok', id) | ('limit'|'points', None)"""
+def create_order(user_id: int, lot_id: str, price: int, stock: int | None = None):
+    """Покупка одной транзакцией: баллы, лимит позиций и остаток проверяются атомарно.
+    -> ('ok', id) | ('limit'|'points'|'stock', None)"""
     db = sqlite3.connect(DB_PATH, isolation_level=None)
     try:
         db.execute("BEGIN IMMEDIATE")
@@ -705,11 +710,13 @@ def create_order(user_id: int, lot_id: str, price: int):
             "WHERE user_id = ? AND status = 'approved'", (user_id,)
         ).fetchone()[0]
         spent, count = db.execute(
-            "SELECT COALESCE(SUM(price), 0), COUNT(*) FROM orders "
-            "WHERE user_id = ?", (user_id,)
+            "SELECT COALESCE(SUM(price), 0), COUNT(*) FROM orders WHERE user_id = ?", (user_id,)
         ).fetchone()
+        taken = db.execute("SELECT COUNT(*) FROM orders WHERE lot_id = ?", (lot_id,)).fetchone()[0]
 
-        if count >= MAX_ORDERS:
+        if stock is not None and taken >= stock:
+            result = ("stock", None)
+        elif count >= MAX_ORDERS:
             result = ("limit", None)
         elif earned - spent < price:
             result = ("points", None)
@@ -729,6 +736,12 @@ def create_order(user_id: int, lot_id: str, price: int):
         raise
     finally:
         db.close()
+
+
+def lot_taken_counts() -> dict:
+    """{id подарка: сколько штук уже куплено}"""
+    with sqlite3.connect(DB_PATH) as db:
+        return dict(db.execute("SELECT lot_id, COUNT(*) FROM orders GROUP BY lot_id").fetchall())
 
 
 def get_orders(user_id: int):
@@ -926,6 +939,11 @@ def shop_open(user_id: int | None = None) -> bool:
     )
 
 
+def rules_text() -> str:
+    """Правила Медиабинго; время открытия обмена берётся из SHOP_OPEN_AT."""
+    return TEXT_MEDIABINGO.format(shop_time=SHOP_OPEN_AT.strftime("%H:%M"))
+
+
 def panel_text(user_id: int | None = None) -> str:
     """Текст главного экрана. После закрытия заданий это текст первой рассылки —
     поэтому «Назад» из профиля возвращает именно к нему."""
@@ -937,12 +955,9 @@ def panel_text(user_id: int | None = None) -> str:
 
 
 def closed_panel_keyboard(user_id: int | None = None):
-    """После закрытия заданий: кнопка витрины (или ожидания) и профиль."""
+    """После закрытия заданий: витрина и профиль."""
     kb = InlineKeyboardBuilder()
-    if shop_open(user_id):
-        kb.row(CallbackButton(text=BUTTON_SHOP, payload="shop"))
-    else:
-        kb.row(CallbackButton(text=BUTTON_WAIT_SHOP, payload="wait_shop"))   # «неактивная» кнопка
+    kb.row(CallbackButton(text=BUTTON_SHOP, payload="shop"))
     kb.row(CallbackButton(text=BUTTON_PROFILE, payload="profile"))
     return kb.as_markup()
 
@@ -961,6 +976,7 @@ def panel_keyboard(user_id: int):
             )
             for t in row
         ])
+    kb.row(CallbackButton(text=BUTTON_SHOP, payload="shop"))   # смотреть цены можно сразу
     kb.row(
         CallbackButton(text=BUTTON_PROFILE, payload="profile"),
         CallbackButton(text=BUTTON_RULES, payload="rules"),
@@ -1128,24 +1144,42 @@ def task_view_text(user_id: int, task_id: str) -> str:
 
 
 # --- витрина ---
+def is_sold_out(lot: dict, taken: dict | None = None) -> bool:
+    taken = lot_taken_counts() if taken is None else taken
+    return taken.get(lot["id"], 0) >= lot["stock"]
+
+
 def shop_text(user_id: int) -> str:
-    lots = "\n".join(f"{i}. {lot['name']} — {lot['price']} б" for i, lot in enumerate(LOTS, 1))
+    taken = lot_taken_counts()
+    lines = []
+    for i, lot in enumerate(LOTS, 1):
+        line = f"{i}. {lot['name']} — {lot['price']} б"
+        if is_sold_out(lot, taken):
+            line += " — закончилась"
+        lines.append(line)
+    lots = "\n".join(lines)
+    if not shop_open(user_id):   # до открытия — только посмотреть, что и сколько стоит
+        return TEXT_SHOP_PREVIEW.format(
+            time=SHOP_OPEN_AT.strftime("%H:%M"), balance=get_balance(user_id), lots=lots
+        )
     return TEXT_SHOP.format(
         balance=get_balance(user_id), count=count_orders(user_id), max=MAX_ORDERS, lots=lots
     )
 
 
-def shop_keyboard():
-    """Таблица кнопок: по два подарка в ряд."""
+def shop_keyboard(user_id: int | None = None):
+    """Таблица кнопок: по два подарка в ряд. До открытия витрины — только «Назад»."""
+    if not shop_open(user_id):
+        return back_keyboard()
+    taken = lot_taken_counts()
     kb = InlineKeyboardBuilder()
     for i in range(0, len(LOTS), 2):
-        kb.row(*[
-            CallbackButton(
-                text=f"{lot.get('short', lot['name'])} · {lot['price']} б",
-                payload=f"lot:{lot['id']}",
-            )
-            for lot in LOTS[i:i + 2]
-        ])
+        row = []
+        for lot in LOTS[i:i + 2]:
+            short = lot.get("short", lot["name"])
+            label = f"✖ {short}" if is_sold_out(lot, taken) else f"{short} · {lot['price']} б"
+            row.append(CallbackButton(text=label, payload=f"lot:{lot['id']}"))
+        kb.row(*row)
     kb.row(CallbackButton(text=BUTTON_ORDERS, payload="orders"))
     return kb.as_markup()
 
@@ -1322,9 +1356,9 @@ def render_view(user_id: int, view: str | None):
     if view == "profile":
         return TEXT_PROFILE.format(points=get_balance(user_id)), profile_keyboard()
     if view == "rules":
-        return TEXT_MEDIABINGO, back_keyboard()
+        return rules_text(), back_keyboard()
     if view == "shop":
-        return shop_text(user_id), shop_keyboard()
+        return shop_text(user_id), shop_keyboard(user_id)
     if view == "orders":
         return orders_text(user_id), orders_keyboard()
     if view and view.startswith("task:"):
@@ -1673,6 +1707,19 @@ async def run_announcement(ann_id: int):
             logging.exception("Не удалось отправить итог рассылки")
 
 
+# «/stock» — сколько каких подарков осталось
+@dp.message_created(Command("stock"))
+async def on_stock_command(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    taken = lot_taken_counts()
+    lines = ["📦 Остатки подарков (осталось / всего)"]
+    for lot in LOTS:
+        left = max(lot["stock"] - taken.get(lot["id"], 0), 0)
+        lines.append(f"{lot['name']}: {left} / {lot['stock']}" + ("  — закончилась" if left == 0 else ""))
+    await event.message.answer("\n".join(lines))
+
+
 # «/resetme» — удалить ВАШИ данные (регистрацию, ответы, покупки), чтобы пройти всё заново.
 # Данные других участников не затрагиваются.
 @dp.message_created(Command("resetme"))
@@ -1785,7 +1832,7 @@ async def on_phone(event: MessageCreated, context: MemoryContext):
     logging.info("Зарегистрирован: %s, %s", data["fio"], phone)
 
     await context.clear()
-    await send_screen_message(TEXT_MEDIABINGO, image="registered", chat_id=chat_id)
+    await send_screen_message(rules_text(), image="registered", chat_id=chat_id)
     await show_screen(
         user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
         image=panel_image(user_id),
@@ -1820,7 +1867,7 @@ async def on_rules_button(event: MessageCallback, context: MemoryContext):
     await context.clear()
     user_id = event.callback.user.user_id
     track(event, user_id, "rules")
-    await event.message.edit(text=TEXT_MEDIABINGO, attachments=[back_keyboard()])
+    await event.message.edit(text=rules_text(), attachments=[back_keyboard()])
 
 
 @dp.message_callback(F.callback.payload.startswith("task:"))
@@ -1925,21 +1972,11 @@ async def on_quiz_answer(event: MessageCallback, context: MemoryContext):
 
 
 # region Приём ответов участников
-URL_RE = re.compile(r"(https?://|www\.|max\.)\S+", re.IGNORECASE)
-
-
-def validate_answer(accept: str, text: str, attachments: list) -> str | None:
-    """None — ответ годится, иначе текст подсказки участнику."""
+def validate_answer(attachments: list) -> str | None:
+    """None — ответ годится (нужен скриншот картинкой), иначе подсказка участнику."""
     if len(attachments) > MAX_ATTACHMENTS:
         return TEXT_TOO_MANY_FILES
-    if accept == "photo":
-        return None if attachments else TEXT_BAD_PHOTO
-    # story: скриншот истории ИЛИ ссылка на профиль текстом
-    if attachments:
-        return None
-    if text and len(text) <= MAX_LINK_LEN and URL_RE.search(text):
-        return None
-    return TEXT_BAD_STORY
+    return None if attachments else TEXT_BAD_PHOTO
 
 
 @dp.message_created(Submit.waiting)
@@ -1985,7 +2022,7 @@ async def on_submission(event: MessageCreated, context: MemoryContext):
         return
 
     # Обычное задание: проверяем формат и размер
-    problem = validate_answer(TASKS[task_id].get("accept", "story"), text, attachments)
+    problem = validate_answer(attachments)
     if problem:
         await message.answer(problem)
         return
@@ -2010,7 +2047,7 @@ IDLE_VIEWS = ("menu", "notice", "profile", "rules", "shop", "orders")   # экр
 async def show_home(user_id: int, chat_id: int | None = None):
     """Главный экран по этапу: задания (до рассылок) / ожидание витрины / витрина."""
     if shop_open(user_id):
-        await show_screen(user_id, shop_text(user_id), shop_keyboard(), "shop", chat_id)
+        await show_screen(user_id, shop_text(user_id), shop_keyboard(user_id), "shop", chat_id)
     else:
         await show_screen(
             user_id, panel_text(user_id), panel_keyboard(user_id), "menu", chat_id,
@@ -2275,20 +2312,12 @@ if BaseMiddleware:
 _last_buy: dict[int, float] = {}
 
 
-@dp.message_callback(F.callback.payload == "wait_shop")
-async def on_wait_shop(event: MessageCallback):
-    await event.answer(notification=TEXT_WAIT_SHOP.format(time=SHOP_OPEN_AT.strftime("%H:%M")))
-
-
 @dp.message_callback(F.callback.payload == "shop")
 async def on_shop(event: MessageCallback, context: MemoryContext):
     await context.clear()
     user_id = event.callback.user.user_id
-    if not shop_open(user_id):
-        await event.answer(notification=TEXT_WAIT_SHOP.format(time=SHOP_OPEN_AT.strftime("%H:%M")))
-        return
-    track(event, user_id, "shop")
-    await event.message.edit(text=shop_text(user_id), attachments=[shop_keyboard()])
+    track(event, user_id, "shop")   # до открытия — просмотр цен, после — покупки
+    await event.message.edit(text=shop_text(user_id), attachments=[shop_keyboard(user_id)])
 
 
 @dp.message_callback(F.callback.payload.startswith("lot:"))
@@ -2301,7 +2330,9 @@ async def on_lot(event: MessageCallback):
     track(event, user_id, "flow")
 
     balance = get_balance(user_id)
-    if count_orders(user_id) >= MAX_ORDERS:
+    if is_sold_out(lot):
+        text, keyboard = TEXT_SOLD_OUT, shop_back_keyboard()
+    elif count_orders(user_id) >= MAX_ORDERS:
         text, keyboard = TEXT_LIMIT.format(max=MAX_ORDERS), shop_back_keyboard()
     elif balance < lot["price"]:
         text, keyboard = TEXT_NO_POINTS.format(price=lot["price"], balance=balance), shop_back_keyboard()
@@ -2326,7 +2357,7 @@ async def on_buy(event: MessageCallback):
         return
     _last_buy[user_id] = now
 
-    result, order_id = create_order(user_id, lot["id"], lot["price"])
+    result, order_id = create_order(user_id, lot["id"], lot["price"], lot["stock"])
     if result == "ok":
         track(event, user_id, "orders")   # чтобы экран подтверждения удалился
         paid = TEXT_ORDERED.format(name=lot["name"], price=lot["price"], left=get_balance(user_id))
@@ -2336,7 +2367,9 @@ async def on_buy(event: MessageCallback):
         return
     track(event, user_id, "flow")
 
-    if result == "limit":
+    if result == "stock":
+        text, keyboard = TEXT_SOLD_OUT, shop_back_keyboard()
+    elif result == "limit":
         text, keyboard = TEXT_LIMIT.format(max=MAX_ORDERS), shop_back_keyboard()
     else:
         text = TEXT_NO_POINTS.format(price=lot["price"], balance=get_balance(user_id))
@@ -2376,7 +2409,7 @@ async def send_broadcast_item(item: dict, user_id: int):
     отдельная панель не отправляется. Для «exchange» ниже идёт экран витрины."""
     if item.get("then") == "shop":
         await send_screen_message(item["text"], image="gift", user_id=user_id)
-        await show_screen(user_id, shop_text(user_id), shop_keyboard(), "shop")
+        await show_screen(user_id, shop_text(user_id), shop_keyboard(user_id), "shop")
     else:
         await show_screen(
             user_id, item["text"], closed_panel_keyboard(user_id), "menu", image="thanks"
