@@ -6,21 +6,6 @@
   <component name="ChangeListManager">
     <list default="true" id="fac80787-21fb-43c8-bde1-0d895fb5975c" name="Changes" comment="q">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/approved.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/approved.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/approved_10.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/approved_10.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/approved_15.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/approved_15.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/approved_30.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/approved_30.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/approved_5.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/approved_5.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/gift.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/gift.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/menu.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/menu.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/pending.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/pending.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/quiz_full.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/quiz_full.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/quiz_partial.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/quiz_partial.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/registered.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/registered.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/rejected.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/rejected.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/thanks.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/thanks.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/images/welcome.jpg" beforeDir="false" afterPath="$PROJECT_DIR$/images/welcome.jpg" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -166,7 +151,39 @@
       <option name="project" value="LOCAL" />
       <updated>1794376521159</updated>
     </task>
-    <option name="localTasksCounter" value="8" />
+    <task id="LOCAL-00008" summary="q">
+      <option name="closed" value="true" />
+      <created>1794425424216</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1794425424216</updated>
+    </task>
+    <task id="LOCAL-00009" summary="q">
+      <option name="closed" value="true" />
+      <created>1794425973227</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1794425973227</updated>
+    </task>
+    <task id="LOCAL-00010" summary="q">
+      <option name="closed" value="true" />
+      <created>1794771205013</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1794771205013</updated>
+    </task>
+    <task id="LOCAL-00011" summary="q">
+      <option name="closed" value="true" />
+      <created>1794915186370</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1794915186370</updated>
+    </task>
+    <option name="localTasksCounter" value="12" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
