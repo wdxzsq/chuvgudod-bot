@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -74,6 +75,8 @@ MAX_OPEN_ANSWER_LEN = 100    # открытый вопрос «тремя сло
 MAX_ATTACHMENTS = 5          # файлов в одном ответе
 MAX_QUESTION_LEN = 1000      # вопрос организаторам
 QUESTIONS_PER_HOUR = 5       # не больше вопросов в час от одного участника
+TAP_COOLDOWN = 1.2           # сек: повторное нажатие той же кнопки игнорируется
+SLOW_HANDLER_SECONDS = 1.0   # дольше этого обработчик попадёт в лог как медленный
 MAX_ANNOUNCE_LEN = 3500      # своя рассылка из чата админов
 FALLBACK_COOLDOWN = 3        # сек: не чаще одного «возврата панели» на пользователя
 
@@ -88,6 +91,20 @@ MAX_ORDERS = 2               # не более 2 позиций на участ�
 
 bot = Bot(token=os.getenv("MAX_BOT_TOKEN"))
 dp = Dispatcher()
+def balls(n: int) -> str:
+    """«1 балл», «3 балла», «5 баллов» — число со словом в правильной форме."""
+    n = abs(int(n))
+    if 11 <= n % 100 <= 14:
+        word = "баллов"
+    elif n % 10 == 1:
+        word = "балл"
+    elif 2 <= n % 10 <= 4:
+        word = "балла"
+    else:
+        word = "баллов"
+    return f"{n} {word}"
+
+
 # endregion
 
 
@@ -111,18 +128,18 @@ TEXT_MEDIABINGO = (
     "сторис и другим форматам. Всё, что поможет тебе по-новому взглянуть на "
     "деловую программу и наполнить соцсети ярким контентом!\n\n"
     "Как начисляются баллы:\n\n"
-    "— 🟩 Клетки — простые задания, 5-10 б\n"
-    "— 🟨 Клетки — средняя сложность, по 15 баллов\n"
-    "— 🟥 Клетки — самые прокачанные, по 30 баллов\n\n"
+    "— 🟩 Клетки — простые задания, от 5 до 10 баллов.\n"
+    "— 🟨 Клетки — средняя сложность, по 15 баллов.\n"
+    "— 🟥 Клетки — самые прокачанные, по 30 баллов.\n\n"
     "Ты сам выбираешь, с чего начать — задания можно выполнять в любом порядке. "
     "После отправки ответа следи за статусом:\n"
-    "— ⏳ задание отправлено на проверку\n"
-    "— ❌ условия не соблюдены, задание не зачтено\n"
-    "— ✅ всё супер, задание выполнено правильно\n\n"
+    "— ⏳ задание отправлено на проверку.\n"
+    "— ❌ условия не соблюдены, задание не зачтено.\n"
+    "— ✅ всё супер, задание выполнено правильно.\n\n"
     "Создавай смело — впереди много классного!\n\n"
     "На заработанные баллы сможешь купить много разного мерча университета. "
     "Обмен откроется в {shop_time}, а посмотреть, что и сколько стоит, можно уже сейчас — "
-    "на витрине (кнопка «🎁 Витрина» в меню)."
+    "на витрине."
 )
 
 TEXT_PROFILE = (
@@ -147,6 +164,7 @@ BUTTON_SHARE_PHONE = "📱 Поделиться номером"
 BUTTON_PROFILE = "📊 Мои баллы"
 BUTTON_BACK = "⬅️ Назад"
 TEXT_BAD_PHOTO = "Пришли скриншот картинкой."
+TEXT_NEED_FILES = "Нужно прислать скриншотов: {n}. Отправь их все одним сообщением."
 TEXT_TOO_MANY_FILES = "Слишком много файлов — отправь не больше 5."
 TEXT_BAD_OPEN = "Ответь коротко — тремя словами (не длиннее 100 символов)."
 BUTTON_RULES = "📖 Правила"
@@ -183,19 +201,19 @@ TEXT_SHOP = (
 )
 TEXT_SHOP_PREVIEW = (
     "🎁 Витрина\n\n"
-    "Покупки откроются в {time}. А пока можно посмотреть, что и сколько стоит.\n\n"
+    "Покупки откроются в {time}.\n\n"
     "Твои баллы: {balance}\n\n"
     "{lots}"
 )
 TEXT_SOLD_OUT = "Этот подарок закончился."
-TEXT_CONFIRM = "Оплатить «{name}» — {price} б?\n\nТвои баллы: {balance} → останется {left}"
+TEXT_CONFIRM = "Оплатить «{name}» — {price}?\n\nТвои баллы: {balance} → останется {left}."
 TEXT_NO_POINTS = "Не хватает баллов: нужно {price}, у тебя {balance}."
 TEXT_LIMIT = "Можно выбрать не более {max} позиций."
-TEXT_ORDERED = "✅ Оплачено: «{name}» — {price} б. Осталось баллов: {left}."
+TEXT_ORDERED = "✅ Оплачено: «{name}» — {price}. Осталось баллов: {left}."
 TEXT_ORDERS_EMPTY = "Пока ничего не куплено."
 TEXT_ORDERS = (
     "🧾 Мои покупки\n{fio}\n\n{items}\n\n"
-    "Оплачено баллами: {total} б\n\n"
+    "Оплачено: {total}.\n\n"
     "Покажи этот экран администратору у стола с мерчом."
 )
 TEXT_PANEL_SHOP = "Витрина открыта — выбирай подарки!"
@@ -203,12 +221,12 @@ TEXT_REJECTED = "❌ Задание {short}: условия не соблюде�
 TEXT_REJECTED_RETRY = "Попробуй ещё раз: открой задание и отправь новый ответ."
 TEXT_RETRY = "Попробуй ещё раз — отправь новый ответ сообщением."
 TEXT_CONGRATS = (
-    "Поздравляю! Ты получил {points} баллов за выполнение задания Медиабинго! "
+    "Поздравляю! Ты получил {points} за выполнение задания Медиабинго! "
     "Продолжай в том же духе — впереди ещё много интересных заданий и возможностей "
     "увеличить свой рейтинг!"
 )
 # После закрытия заданий «впереди ещё задания» уже неверно — короткий вариант
-TEXT_CONGRATS_SHORT = "Поздравляю! Ты получил {points} баллов за выполнение задания Медиабинго!"
+TEXT_CONGRATS_SHORT = "Поздравляю! Ты получил {points} за выполнение задания Медиабинго!"
 
 # --- Вопросы организаторам (тексты-заглушки — поменяйте под себя) ---
 BUTTON_ASK = "❓ Задать вопрос"
@@ -224,14 +242,19 @@ TEXT_ANSWER = "💬 Ответ организаторов:\n\n{text}"
 TAIL = "После проверки модераторами, тебе будут начислены баллы."
 
 
-def story_task(points: int, action: str) -> str:
+def story_task(points: int, action: str, shots: int = 1) -> str:
     """Задание «выложи историю в Макс» — одни и те же короткие шаги для всех.
-    Принимается только скриншот истории (ссылку на историю в Макс создать нельзя)."""
+    Принимаются только скриншоты истории (ссылку на историю в Макс создать нельзя)."""
+    if shots == 1:
+        publish, send = "Выложи в историю в Макс с хештегом #мывчувгу.", "Пришли в бот скриншот истории."
+    else:
+        publish = "Выложи их в историю в Макс с хештегом #мывчувгу."
+        send = f"Пришли в бот скриншоты истории ({shots} штуки) одним сообщением."
     return (
-        f"{points} б. –\n"
-        f"1. {action}\n"
-        "2. Выложи в историю в Макс с хештегом #мывчувгу\n"
-        "3. Пришли в бот скриншот истории\n"
+        f"{balls(points)} за задание.\n"
+        f"1. {action}.\n"
+        f"2. {publish}\n"
+        f"3. {send}\n"
         f"4. {TAIL}"
     )
 
@@ -244,10 +267,10 @@ TASKS = {
         "short": "1.1", "icon": "🟩", "points": [5, 10],
         "title": "1 уровень · Задание 1",
         "text": (
-            "Ответь на вопрос и получи 5 б за правильный ответ. "
-            "За два верных ответа получишь 10 б.\n\n"
-            "5 б. – Сколько факультетов в ЧувГУ?\n"
-            "5 б. – Кто является маскотом ЧувГУ?"
+            "Ответь на вопрос и получи 5 баллов за правильный ответ. "
+            "За два верных ответа получишь 10 баллов.\n\n"
+            "5 баллов – Сколько факультетов в ЧувГУ?\n"
+            "5 баллов – Кто является маскотом ЧувГУ?"
         ),
     },
     "1-2": {
@@ -261,13 +284,13 @@ TASKS = {
                      "училищ Симбирской губернии (отец В. И. Ленина)",
         "title": "1 уровень · Задание 3",
         "text": (
-            "Ответь на вопрос и получи 5 б за правильный ответ. "
-            "За два верных ответа получишь 10 б.\n\n"
-            "5 б. – Кто такой Ульянов И.Н., имя которого носит университет? "
-            "Напиши тремя словами\n"
-            "5 б. – Где находится Приемная комиссия ЧувГУ? "
-            "(Кампус «Университетский» (ул. Университетская, 38) или "
-            "Кампус «Технопарк» (пр. Московский, 15))"
+            "Ответь на вопрос и получи 5 баллов за правильный ответ. "
+            "За два верных ответа получишь 10 баллов.\n\n"
+            "5 баллов – Кто такой Ульянов И.Н., имя которого носит университет? "
+            "Напиши тремя словами.\n"
+            "5 баллов – Где находится Приемная комиссия ЧувГУ? "
+            "Кампус «Университетский» (ул. Университетская, 38) или "
+            "кампус «Технопарк» (пр. Московский, 15)."
         ),
     },
     "2-1": {
@@ -284,16 +307,17 @@ TASKS = {
         "short": "2.3", "icon": "🟨", "points": [15],
         "title": "2 уровень · Задание 3",
         "text": (
-            "15 б. –\n"
+            f"{balls(15)} за задание.\n"
             "1. Подпишись на канал ЧувГУ в Макс: https://max.ru/chuvsu\n"
-            "2. Пришли в бот скриншот подписки\n"
+            "2. Пришли в бот скриншот подписки.\n"
             f"3. {TAIL}"
         ),
     },
     "3-1": {
         "short": "3.1", "icon": "🟥", "points": [30],
+        "min_files": 3,   # нужно три скриншота (по одному с каждой площадки), одним сообщением
         "title": "3 уровень · Задание 1",
-        "text": story_task(30, "Сделай фото на площадках 3 факультетов"),
+        "text": story_task(30, "Сделай фото на площадках 3 факультетов", shots=3),
     },
     "3-2": {
         "short": "3.2", "icon": "🟥", "points": [30],
@@ -317,7 +341,7 @@ TASK_META = {
     "2-1": "История: фото с синим предметом, #мывчувгу (скриншот)",
     "2-2": "История: селфи с Ульяном, #мывчувгу (скриншот)",
     "2-3": "Подписка на канал ЧувГУ в Макс (скриншот)",
-    "3-1": "История: фото на площадках 3 факультетов, #мывчувгу (скриншот)",
+    "3-1": "История: фото на площадках 3 факультетов, #мывчувгу (3 скриншота)",
     "3-2": "История о мероприятии в концертном зале Дворца ЧувГУ, #мывчувгу (скриншот)",
     "extra": "История: фото на площадке Военного учебного центра, #мывчувгу (скриншот)",
 }
@@ -331,8 +355,8 @@ for _task_id, _brief in TASK_META.items():
 # Данные собраны из открытых источников — перед запуском сверьте с организаторами.
 QUIZZES = {
     "1-1": {
-        "intro": "Ответь на вопрос и получи 5 б за правильный ответ. "
-                 "За два верных ответа получишь 10 б.",
+        "intro": "Ответь на вопрос и получи 5 баллов за правильный ответ. "
+                 "За два верных ответа получишь 10 баллов.",
         "points": 5,
         "questions": [
             {"text": "Сколько факультетов в ЧувГУ?",
@@ -342,8 +366,8 @@ QUIZZES = {
         ],
     },
     "1-3": {
-        "intro": "Ответь на вопрос и получи 5 б за правильный ответ. "
-                 "За два верных ответа получишь 10 б.",
+        "intro": "Ответь на вопрос и получи 5 баллов за правильный ответ. "
+                 "За два верных ответа получишь 10 баллов.",
         "points": 5,
         "open": {
             "text": "Кто такой Ульянов И.Н., имя которого носит университет? "
@@ -371,34 +395,37 @@ PANEL_ROWS = [
 # Статусы: нет записи (не начато) / pending / rejected / approved
 STATUS_ICON = {"pending": "⏳", "rejected": "❌", "approved": "✅"}
 STATUS_TEXT = {
-    "pending": "⏳ задание отправлено на проверку",
-    "rejected": "❌ условия не соблюдены, задание не зачтено",
-    "approved": "✅ всё супер, задание выполнено правильно",
+    "pending": "⏳ задание отправлено на проверку.",
+    "rejected": "❌ условия не соблюдены, задание не зачтено.",
+    "approved": "✅ всё супер, задание выполнено правильно.",
 }
 # endregion
 
 
 # region Витрина: товары
-# Список и стоимость из сценария («Виртуальный обменник»).
-# short — короткая подпись для кнопки (если название длинное).
+# Название, цена и количество — из таблицы организаторов.
+#   stock — сколько штук всего: когда купят столько, подарок «закончился».
+#   short — короткая подпись на кнопке (если название длинное).
 LOTS = [
-    {"id": "pen", "name": "Ручка", "price": 35},
-    {"id": "pencil", "name": "Карандаш", "price": 35},
-    {"id": "ruler", "name": "Линейка", "price": 35},
-    {"id": "sharpener", "name": "Точилка", "price": 45},
-    {"id": "notebook", "name": "Блокнот", "price": 55},
-    {"id": "pencilcase", "name": "Пенал", "price": 90},
-    {"id": "keychain", "name": "Брелок", "price": 115},
-    {"id": "mug", "name": "Кружка", "price": 150},
-    {"id": "bottle", "name": "Бутылка", "price": 155},
-    {"id": "shopper", "name": "Шопер", "price": 160},
-    {"id": "waistbag", "name": "Поясная сумка", "short": "Сумка", "price": 165},
-    {"id": "tshirt", "name": "Футболка", "price": 175},
-    {"id": "backpack", "name": "Рюкзак", "price": 185},
+    {"id": "ruler", "name": "Линейка", "price": 35, "stock": 15},
+    {"id": "pencil", "name": "Карандаш", "price": 35, "stock": 20},
+    {"id": "sharpener", "name": "Точилка-ластик", "short": "Точилка", "price": 35, "stock": 10},
+    {"id": "cardcase", "name": "Чехол для карты", "short": "Чехол", "price": 35, "stock": 13},
+    {"id": "keychain", "name": "Брелок", "price": 40, "stock": 20},
+    {"id": "popsocket", "name": "Попсокет", "price": 40, "stock": 10},
+    {"id": "bracelet", "name": "Резиновый браслет", "short": "Браслет", "price": 35, "stock": 3},
+    {"id": "pen", "name": "Ручка", "price": 35, "stock": 10},
+    {"id": "pencilcase", "name": "Пенал", "price": 55, "stock": 15},
+    {"id": "mug", "name": "Кружка", "price": 85, "stock": 10},
+    {"id": "notebook", "name": "Блокнот", "price": 60, "stock": 50},
+    {"id": "keychain_ulyan", "name": "Брелок-обвес Ульян", "short": "Обвес Ульян", "price": 80, "stock": 100},
+    {"id": "socks", "name": "Носки", "price": 85, "stock": 10},
+    {"id": "xmas_ball", "name": "Елочный шар", "price": 90, "stock": 2},
+    {"id": "bottle", "name": "Бутылка для воды", "short": "Бутылка", "price": 100, "stock": 15},
+    {"id": "shopper", "name": "Шоппер", "price": 115, "stock": 5},
+    {"id": "banana_bag", "name": "Сумка-банан", "price": 115, "stock": 1},
+    {"id": "backpack", "name": "Рюкзак", "price": 145, "stock": 4},
 ]
-DEFAULT_STOCK = 500   # пока по 500 штук каждого; впишите реальные остатки в "stock" нужных подарков
-for _lot in LOTS:
-    _lot.setdefault("stock", DEFAULT_STOCK)
 LOTS_BY_ID = {lot["id"]: lot for lot in LOTS}
 # endregion
 
@@ -438,6 +465,8 @@ def db_init():
             "price INTEGER NOT NULL, "
             "created_at TEXT DEFAULT (datetime('now')))"
         )
+        # Токены картинок, уже загруженных в MAX (чтобы не грузить файл при каждой отправке)
+        db.execute("CREATE TABLE IF NOT EXISTS image_tokens (key TEXT PRIMARY KEY, token TEXT NOT NULL)")
         # Вопросы участников организаторам
         db.execute(
             "CREATE TABLE IF NOT EXISTS questions ("
@@ -611,6 +640,23 @@ def set_announcement_status(ann_id: int, old: str, new: str) -> bool:
         return cur.rowcount > 0
 
 
+# --- токены загруженных в MAX картинок (чтобы не грузить файл при каждой отправке) ---
+def get_image_token(key: str) -> str | None:
+    with sqlite3.connect(DB_PATH) as db:
+        row = db.execute("SELECT token FROM image_tokens WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_image_token(key: str, token: str):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("INSERT OR REPLACE INTO image_tokens (key, token) VALUES (?, ?)", (key, token))
+
+
+def clear_image_token(key: str):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("DELETE FROM image_tokens WHERE key = ?", (key,))
+
+
 def delete_user_data(user_id: int):
     """Удаляет все данные одного участника (для проверки регистрации заново)."""
     with sqlite3.connect(DB_PATH) as db:
@@ -733,6 +779,12 @@ def create_order(user_id: int, lot_id: str, price: int, stock: int | None = None
         raise
     finally:
         db.close()
+
+
+def clear_orders() -> int:
+    """Удаляет все покупки (для тестов). -> сколько удалено"""
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute("DELETE FROM orders").rowcount
 
 
 def lot_taken_counts() -> dict:
@@ -973,11 +1025,11 @@ def panel_keyboard(user_id: int):
             )
             for t in row
         ])
-    kb.row(CallbackButton(text=BUTTON_SHOP, payload="shop"))   # смотреть цены можно сразу
     kb.row(
         CallbackButton(text=BUTTON_PROFILE, payload="profile"),
         CallbackButton(text=BUTTON_RULES, payload="rules"),
     )
+    kb.row(CallbackButton(text=BUTTON_SHOP, payload="shop"))   # смотреть цены можно сразу
     return kb.as_markup()
 
 
@@ -1007,7 +1059,7 @@ def quiz_text(task_id: str, qi: int) -> str:
     question = quiz["questions"][qi]
     text = (
         f"{TASKS[task_id]['title']}\n\n{quiz['intro']}\n\n"
-        f"{quiz['points']} б. – {question['text']}"
+        f"{balls(quiz['points'])} – {question['text']}"
     )
     # Длинные варианты (адреса) выводим в тексте, а на кнопках остаются короткие подписи
     if question.get("details"):
@@ -1019,7 +1071,7 @@ def open_question_text(task_id: str) -> str:
     quiz = QUIZZES[task_id]
     return (
         f"{TASKS[task_id]['title']}\n\n{quiz['intro']}\n\n"
-        f"{quiz['open']['points']} б. – {quiz['open']['text']}"
+        f"{balls(quiz['open']['points'])} – {quiz['open']['text']}"
     )
 
 
@@ -1042,10 +1094,10 @@ def moderation_keyboard(sub_id: int, task_id: str):
     points = TASKS[task_id]["points"]
     kb = InlineKeyboardBuilder()
     if len(points) == 1:
-        kb.row(CallbackButton(text=f"✅ Зачесть +{points[0]} б", payload=f"mod:{sub_id}:ok:{points[0]}"))
+        kb.row(CallbackButton(text=f"✅ Зачесть +{balls(points[0])}", payload=f"mod:{sub_id}:ok:{points[0]}"))
     else:
         kb.row(*[
-            CallbackButton(text=f"✅ +{p} б", payload=f"mod:{sub_id}:ok:{p}") for p in points
+            CallbackButton(text=f"✅ +{balls(p)}", payload=f"mod:{sub_id}:ok:{p}") for p in points
         ])
     kb.row(CallbackButton(text="❌ Отклонить", payload=f"mod:{sub_id}:no:0"))
     return kb.as_markup()
@@ -1118,10 +1170,10 @@ def task_text(user_id: int, task_id: str) -> str:
         elif earned == 0:
             line = STATUS_TEXT["rejected"]
         else:
-            line = "🔸 верно частично"
+            line = "🔸 верно частично."
         text += f"\n\nСтатус: {line}"
         if status != "pending" or earned > 0:
-            text += f"\nНачислено: {earned} из {total} б"
+            text += f"\nНачислено: {earned} из {balls(total)}."
         breakdown = quiz_breakdown(user_id, task_id, status)
         return f"{text}\n\n{breakdown}" if breakdown else text
 
@@ -1150,7 +1202,7 @@ def shop_text(user_id: int) -> str:
     taken = lot_taken_counts()
     lines = []
     for i, lot in enumerate(LOTS, 1):
-        line = f"{i}. {lot['name']} — {lot['price']} б"
+        line = f"{i}. {lot['name']} — {balls(lot['price'])}"
         if is_sold_out(lot, taken):
             line += " — закончилась"
         lines.append(line)
@@ -1174,7 +1226,7 @@ def shop_keyboard(user_id: int | None = None):
         row = []
         for lot in LOTS[i:i + 2]:
             short = lot.get("short", lot["name"])
-            label = f"✖ {short}" if is_sold_out(lot, taken) else f"{short} · {lot['price']} б"
+            label = f"✖ {short}" if is_sold_out(lot, taken) else short   # цены — в тексте над кнопками
             row.append(CallbackButton(text=label, payload=f"lot:{lot['id']}"))
         kb.row(*row)
     kb.row(CallbackButton(text=BUTTON_ORDERS, payload="orders"))
@@ -1212,9 +1264,9 @@ def orders_text(user_id: int) -> str:
     rows = get_orders(user_id)
     if not rows:
         return f"🧾 Мои покупки\n{fio or '—'}\n\n{TEXT_ORDERS_EMPTY}"
-    items = "\n".join(f"№{oid} · {lot_name(lot_id)} · {price} б" for oid, lot_id, price in rows)
+    items = "\n".join(f"№{oid} · {lot_name(lot_id)} · {balls(price)}" for oid, lot_id, price in rows)
     total = sum(price for _, _, price in rows)
-    return TEXT_ORDERS.format(fio=fio or "—", items=items, total=total)
+    return TEXT_ORDERS.format(fio=fio or "—", items=items, total=balls(total))
 
 
 def display_name(user) -> str:
@@ -1292,15 +1344,76 @@ async def edit_message_safe(mid: str | None, text: str, keyboard) -> bool:
         return False
 
 
-def image_attachment(*names: str):
-    """Картинка из папки images/ (png, jpg, jpeg, webp) — первая найденная из names, иначе None."""
+def find_image(*names: str) -> Path | None:
+    """Файл картинки из папки images/ (png, jpg, jpeg, webp) — первая найденная из names."""
     for name in names:
         for ext in (".png", ".jpg", ".jpeg", ".webp"):
             path = IMAGES_DIR / f"{name}{ext}"
             if path.exists():
-                from maxapi.types import InputMedia
-                return InputMedia(path=str(path))
+                return path
     return None
+
+
+def image_key(path: Path) -> str:
+    """Ключ кэша токена: при замене файла (другой размер/дата) картинка загрузится заново."""
+    stat = path.stat()
+    return f"{path.name}:{int(stat.st_mtime)}:{stat.st_size}"
+
+
+def _optimized(path: Path) -> Path:
+    """Крупные картинки сжимаются (до 1000 px, jpg) — загрузка быстрее. Нужен Pillow; иначе — файл как есть."""
+    try:
+        if path.stat().st_size <= 250_000:
+            return path
+        from PIL import Image
+        out = Path(tempfile.gettempdir()) / "chuvgu_img_opt" / f"{path.stem}_{int(path.stat().st_mtime)}.jpg"
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((1000, 1000))
+                im.save(out, "JPEG", quality=85, optimize=True)
+        return out if out.stat().st_size < path.stat().st_size else path
+    except Exception:
+        return path
+
+
+class _ImageByToken:
+    """Запасной вариант вложения «картинка по токену» (если в библиотеке нет своего класса)."""
+
+    def __init__(self, token: str):
+        self.token = token
+
+    def model_dump(self, *args, **kwargs):
+        return {"type": "image", "payload": {"token": self.token}}
+
+
+def _token_attachment(token: str):
+    """Вложение «уже загруженная картинка» — без повторной загрузки и ожидания обработки."""
+    try:
+        from maxapi.enums.upload_type import UploadType
+        from maxapi.types.attachments.upload import AttachmentPayload, AttachmentUpload
+        return AttachmentUpload(type=UploadType.IMAGE, payload=AttachmentPayload(token=token))
+    except Exception:
+        return _ImageByToken(token)
+
+
+_token_reuse_ok = True   # выключится само, если отправка по токену не поддерживается
+
+
+def remember_image_token(sent, key: str):
+    """После первой загрузки достаём токен картинки из ответа MAX и запоминаем."""
+    try:
+        message = getattr(sent, "message", sent)
+        for att in getattr(getattr(message, "body", None), "attachments", None) or []:
+            att_type = getattr(att, "type", "")
+            if str(getattr(att_type, "value", att_type)) == "image":
+                token = getattr(getattr(att, "payload", None), "token", None)
+                if token:
+                    set_image_token(key, token)
+                    return
+    except Exception:
+        logging.warning("Не удалось запомнить токен картинки", exc_info=True)
 
 
 def panel_image(user_id: int) -> str:
@@ -1314,31 +1427,63 @@ def panel_image(user_id: int) -> str:
 
 async def send_screen_message(text: str, keyboard=None, image=None, **target):
     """Сообщение с необязательной картинкой (имя или несколько имён на выбор).
-    Нет файла или картинка не загрузилась — сообщение уходит без неё."""
+    Картинка грузится в MAX один раз, дальше уходит по сохранённому токену — это быстро.
+    Нет файла или картинка не отправилась — сообщение уходит без неё."""
+    global _token_reuse_ok
     names = (image,) if isinstance(image, str) else tuple(image or ())
-    picture = image_attachment(*names) if names else None
-    attachments = [a for a in (picture, keyboard) if a]
-    try:
-        return await bot.send_message(text=text, attachments=attachments or None, **target)
-    except Exception:
-        if not picture:
-            raise
-        logging.warning("Не удалось отправить картинку %s — шлю без неё", names, exc_info=True)
-        return await bot.send_message(
-            text=text, attachments=[keyboard] if keyboard else None, **target
-        )
+    path = find_image(*names) if names else None
+    buttons = [keyboard] if keyboard else []
+
+    if path:
+        key = image_key(path)
+        token = get_image_token(key) if _token_reuse_ok else None
+        if token:
+            try:
+                return await bot.send_message(
+                    text=text, attachments=[_token_attachment(token), *buttons], **target
+                )
+            except (AttributeError, TypeError, ValueError):
+                _token_reuse_ok = False   # отправка по токену не поддерживается этой версией библиотеки
+                logging.warning("Отправка картинки по токену не поддерживается — грузим файл каждый раз", exc_info=True)
+            except Exception:
+                logging.warning("Токен картинки не подошёл — загружаю заново", exc_info=True)
+                clear_image_token(key)
+        try:
+            from maxapi.types import InputMedia
+            sent = await bot.send_message(
+                text=text, attachments=[InputMedia(path=str(_optimized(path))), *buttons], **target
+            )
+            remember_image_token(sent, key)
+            return sent
+        except Exception:
+            logging.warning("Не удалось отправить картинку %s — шлю без неё", names, exc_info=True)
+
+    return await bot.send_message(text=text, attachments=buttons or None, **target)
+
+
+_screen_locks: dict[int, asyncio.Lock] = {}
+_cleanup_tasks: set = set()
+
+
+def _background(coro):
+    """Запуск в фоне (например, удаление старого сообщения), чтобы не задерживать отклик."""
+    task = asyncio.create_task(coro)
+    _cleanup_tasks.add(task)
+    task.add_done_callback(_cleanup_tasks.discard)
 
 
 async def show_screen(user_id: int, text: str, keyboard, view: str,
                       chat_id: int | None = None, image=None):
-    """Новое сообщение-панель внизу чата (с картинкой, если она есть); предыдущее удаляется."""
-    old_mid, _ = get_panel(user_id)
-    target = {"chat_id": chat_id} if chat_id else {"user_id": user_id}
-    sent = await send_screen_message(text, keyboard, image, **target)
-    new_mid = extract_mid(sent)
-    set_panel(user_id, new_mid, view)
-    if old_mid and old_mid != new_mid:
-        await delete_message_safe(old_mid)
+    """Новое сообщение-панель внизу чата (с картинкой, если она есть); предыдущее удаляется.
+    Для одного участника выполняется строго по очереди — быстрые повторные нажатия не плодят дубли."""
+    async with _screen_locks.setdefault(user_id, asyncio.Lock()):
+        old_mid, _ = get_panel(user_id)
+        target = {"chat_id": chat_id} if chat_id else {"user_id": user_id}
+        sent = await send_screen_message(text, keyboard, image, **target)
+        new_mid = extract_mid(sent)
+        set_panel(user_id, new_mid, view)
+        if old_mid and old_mid != new_mid:
+            _background(delete_message_safe(old_mid))
 
 
 def track(event: MessageCallback, user_id: int, view: str):
@@ -1553,7 +1698,7 @@ async def on_status(event: MessageCreated):
         state = "завершена" if done else "идёт" if item["id"] in _RUNNING else "начата" if started else "ждёт"
         lines.append(f"Рассылка «{item['id']}» ({item['at']:%d.%m %H:%M}): {state}, получили {sent}")
     count, total = orders_summary()
-    lines.append(f"Покупок: {count} на {total} б")
+    lines.append(f"Покупок: {count} на {balls(total)}")
     await event.message.answer("\n".join(lines))
 
 
@@ -1715,6 +1860,103 @@ async def on_stock_command(event: MessageCreated):
         left = max(lot["stock"] - taken.get(lot["id"], 0), 0)
         lines.append(f"{lot['name']}: {left} / {lot['stock']}" + ("  — закончилась" if left == 0 else ""))
     await event.message.answer("\n".join(lines))
+
+
+# «/warmup» — один раз прогнать все картинки через MAX, чтобы у участников они открывались мгновенно
+# (токены запоминаются в базе). Запускайте после загрузки или замены картинок.
+@dp.message_created(Command("warmup"))
+async def on_warmup(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    names = sorted({p.stem for p in IMAGES_DIR.glob("*") if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp")})
+    if not names:
+        await event.message.answer("В папке images/ нет картинок.")
+        return
+    await event.message.answer(f"Прогреваю картинки ({len(names)}) — это займёт около минуты. Итог напишу сюда.")
+    _background(_run_warmup(names))
+
+
+async def _run_warmup(names: list[str]):
+    done = cached = failed = 0
+    for name in names:
+        path = find_image(name)
+        if path and get_image_token(image_key(path)):
+            cached += 1
+            continue
+        try:
+            await send_screen_message(f"🖼 {name}", image=name, chat_id=ADMIN_CHAT_ID)
+            done += 1
+        except Exception:
+            failed += 1
+            logging.exception("Прогрев картинки %s не удался", name)
+    ok = bool(get_image_token(image_key(find_image(names[0])))) if find_image(names[0]) else False
+    await bot.send_message(
+        chat_id=ADMIN_CHAT_ID,
+        text=f"🖼 Прогрев готов: загружено {done}, уже было {cached}, ошибок {failed}."
+             + ("" if ok else "\n⚠️ Токены не сохранились — картинки будут грузиться при каждой отправке."),
+    )
+
+
+# «/resetstock» — вернуть остатки подарков к исходным (для тестов): удаляет ВСЕ покупки,
+# баллы возвращаются участникам. Нужно подтверждение словом go; если витрина уже открыта
+# по реальному расписанию — ещё и слово «точно».
+@dp.message_created(Command("resetstock"))
+async def on_resetstock(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    parts = (event.message.body.text or "").split()
+    count, spent = orders_summary()
+    if not (len(parts) > 1 and parts[1].lower() in ("go", "да", "yes")):
+        await event.message.answer(
+            f"Покупок сейчас: {count} (на {balls(spent)}). Команда удалит ВСЕ покупки у всех участников: "
+            "остатки подарков вернутся к исходным, баллы вернутся участникам.\n"
+            "Подтвердить: /resetstock go"
+        )
+        return
+    if datetime.now(MSK) >= SHOP_OPEN_AT and not (len(parts) > 2 and parts[2].lower() == "точно"):
+        await event.message.answer(
+            "Витрина уже открыта по расписанию, покупки могут быть настоящими. "
+            "Если это точно нужно: /resetstock go точно"
+        )
+        return
+    removed = clear_orders()
+    await event.message.answer(
+        f"Готово: удалено покупок — {removed}. Остатки подарков снова исходные (смотрите /stock)."
+    )
+
+
+# «/help» — список всех команд для модераторов
+ADMIN_HELP = (
+    "📋 Команды модераторов\n\n"
+    "Проверка и общение\n"
+    "/status — сводка: регистрации, очередь, вопросы, этапы, рассылки, покупки\n"
+    "/queue — задания, ждущие проверки\n"
+    "/questions — вопросы участников без ответа\n"
+    "/reply 12 текст — ответить на вопрос №12 (или «ответить» на карточку вопроса)\n"
+    "/announce текст — своя рассылка всем зарегистрированным (с подтверждением кнопкой)\n\n"
+    "Этапы мероприятия\n"
+    "/send thanks — рассылка «спасибо» и закрытие заданий: сколько получателей\n"
+    "/send exchange — рассылка про витрину и открытие покупок: сколько получателей\n"
+    "(добавьте слово go, чтобы запустить: /send thanks go)\n"
+    "/undo thanks, /undo exchange — откатить запуск (только до времени рассылки)\n\n"
+    "Витрина\n"
+    "/stock — сколько каких подарков осталось\n"
+    "/resetstock — вернуть остатки к исходным (удаляет все покупки, баллы возвращаются); подтверждение: go\n\n"
+    "Проверка и тесты\n"
+    "/preview thanks, /preview exchange — показать себе этап (reset — вернуть реальное время)\n"
+    "/resetme — удалить свои данные и пройти регистрацию заново\n"
+    "/warmup — заранее загрузить картинки (после их замены)\n"
+    "/chatid — id этого чата\n"
+    "/help — этот список\n\n"
+    "У участников только /start и /profile."
+)
+
+
+@dp.message_created(Command("help"))
+async def on_help(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    await event.message.answer(ADMIN_HELP)
 
 
 # «/resetme» — удалить ВАШИ данные (регистрацию, ответы, покупки), чтобы пройти всё заново.
@@ -1969,11 +2211,13 @@ async def on_quiz_answer(event: MessageCallback, context: MemoryContext):
 
 
 # region Приём ответов участников
-def validate_answer(attachments: list) -> str | None:
-    """None — ответ годится (нужен скриншот картинкой), иначе подсказка участнику."""
+def validate_answer(attachments: list, min_files: int = 1) -> str | None:
+    """None — ответ годится (нужны скриншоты картинкой), иначе подсказка участнику."""
     if len(attachments) > MAX_ATTACHMENTS:
         return TEXT_TOO_MANY_FILES
-    return None if attachments else TEXT_BAD_PHOTO
+    if len(attachments) < min_files:
+        return TEXT_BAD_PHOTO if min_files == 1 else TEXT_NEED_FILES.format(n=min_files)
+    return None
 
 
 @dp.message_created(Submit.waiting)
@@ -2019,7 +2263,7 @@ async def on_submission(event: MessageCreated, context: MemoryContext):
         return
 
     # Обычное задание: проверяем формат и размер
-    problem = validate_answer(attachments)
+    problem = validate_answer(attachments, TASKS[task_id].get("min_files", 1))
     if problem:
         await message.answer(problem)
         return
@@ -2225,7 +2469,7 @@ async def on_moderation(event: MessageCallback):
         return
 
     # Карточка: дописываем вердикт и убираем кнопки
-    verdict = f"✅ Зачтено, +{points} б" if approved else "❌ Отклонено"
+    verdict = f"✅ Зачтено, +{balls(points)}" if approved else "❌ Отклонено"
     await event.message.edit(
         text=f"{event.message.body.text or ''}\n\n{verdict} — {name}", attachments=[]
     )
@@ -2236,7 +2480,7 @@ async def on_moderation(event: MessageCallback):
     if view in ("menu", "notice", "profile", "rules"):
         if approved:
             template = TEXT_CONGRATS_SHORT if tasks_closed(user_id) else TEXT_CONGRATS
-            await show_screen(user_id, template.format(points=points),
+            await show_screen(user_id, template.format(points=balls(points)),
                               panel_keyboard(user_id), "notice",
                               image=(f"approved_{points}", "approved"))
             return
@@ -2293,15 +2537,54 @@ async def report_error(error: Exception):
             logging.exception("Не удалось отправить уведомление об ошибке")
 
 
+_recent_events: dict = {}
+
+
+def _is_duplicate(event_object) -> bool:
+    """Повторная доставка того же события или двойное нажатие одной и той же кнопки."""
+    now = time.monotonic()
+    callback = getattr(event_object, "callback", None)
+    if callback is not None:
+        user_id = getattr(getattr(callback, "user", None), "user_id", None)
+        checks = [
+            (("cb", getattr(callback, "callback_id", None)), 60.0),
+            (("tap", user_id, getattr(callback, "payload", None)), TAP_COOLDOWN),
+        ]
+    else:
+        mid = getattr(getattr(getattr(event_object, "message", None), "body", None), "mid", None)
+        checks = [(("msg", mid), 60.0)]
+
+    checks = [(key, window) for key, window in checks if None not in key]
+    for key, window in checks:
+        last = _recent_events.get(key)
+        if last is not None and now - last < window:
+            return True
+    for key, _ in checks:
+        _recent_events[key] = now
+    if len(_recent_events) > 5000:   # чистим старое
+        for key in [k for k, t in _recent_events.items() if now - t > 120]:
+            _recent_events.pop(key, None)
+    return False
+
+
 if BaseMiddleware:
     class ErrorMiddleware(BaseMiddleware):
-        """Ловит исключения в любом обработчике, чтобы бот продолжал работать."""
+        """Ловит исключения в любом обработчике, отсекает дубли событий и пишет в лог медленные обработчики."""
 
         async def __call__(self, handler, event_object, data):
+            if _is_duplicate(event_object):
+                return
+            started = time.perf_counter()
             try:
                 return await handler(event_object, data)
             except Exception as error:
                 await report_error(error)
+            finally:
+                elapsed = time.perf_counter() - started
+                if elapsed > SLOW_HANDLER_SECONDS:
+                    callback = getattr(event_object, "callback", None)
+                    what = getattr(callback, "payload", None) or type(event_object).__name__
+                    logging.warning("Медленный обработчик: %.1f с (%s)", elapsed, what)
 # endregion
 
 
@@ -2332,10 +2615,11 @@ async def on_lot(event: MessageCallback):
     elif count_orders(user_id) >= MAX_ORDERS:
         text, keyboard = TEXT_LIMIT.format(max=MAX_ORDERS), shop_back_keyboard()
     elif balance < lot["price"]:
-        text, keyboard = TEXT_NO_POINTS.format(price=lot["price"], balance=balance), shop_back_keyboard()
+        text = TEXT_NO_POINTS.format(price=balls(lot["price"]), balance=balls(balance))
+        keyboard = shop_back_keyboard()
     else:
         text = TEXT_CONFIRM.format(
-            name=lot["name"], price=lot["price"], balance=balance, left=balance - lot["price"]
+            name=lot["name"], price=balls(lot["price"]), balance=balance, left=balance - lot["price"]
         )
         keyboard = confirm_keyboard(lot["id"])
     await event.message.edit(text=text, attachments=[keyboard])
@@ -2357,7 +2641,7 @@ async def on_buy(event: MessageCallback):
     result, order_id = create_order(user_id, lot["id"], lot["price"], lot["stock"])
     if result == "ok":
         track(event, user_id, "orders")   # чтобы экран подтверждения удалился
-        paid = TEXT_ORDERED.format(name=lot["name"], price=lot["price"], left=get_balance(user_id))
+        paid = TEXT_ORDERED.format(name=lot["name"], price=balls(lot["price"]), left=get_balance(user_id))
         await show_screen(
             user_id, f"{paid}\n\n{orders_text(user_id)}", orders_keyboard(), "orders", image="gift"
         )
@@ -2369,7 +2653,7 @@ async def on_buy(event: MessageCallback):
     elif result == "limit":
         text, keyboard = TEXT_LIMIT.format(max=MAX_ORDERS), shop_back_keyboard()
     else:
-        text = TEXT_NO_POINTS.format(price=lot["price"], balance=get_balance(user_id))
+        text = TEXT_NO_POINTS.format(price=balls(lot["price"]), balance=balls(get_balance(user_id)))
         keyboard = shop_back_keyboard()
     await event.message.edit(text=text, attachments=[keyboard])
 

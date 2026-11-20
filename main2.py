@@ -450,23 +450,28 @@ STATUS_TEXT = {
 
 
 # region Витрина: товары
-# Список и стоимость из сценария («Виртуальный обменник»).
-# short — короткая подпись для кнопки (если название длинное).
+# Название, цена и количество — из таблицы организаторов.
+#   stock — сколько штук всего: когда купят столько, подарок «закончился».
+#   short — короткая подпись на кнопке (если название длинное).
 LOTS = [
-    # stock — сколько штук всего (когда купят столько — подарок «закончился»). Пока везде 500.
-    {"id": "pen", "name": "Ручка", "price": 35, "stock": 500},
-    {"id": "pencil", "name": "Карандаш", "price": 35, "stock": 500},
-    {"id": "ruler", "name": "Линейка", "price": 35, "stock": 500},
-    {"id": "sharpener", "name": "Точилка", "price": 45, "stock": 500},
-    {"id": "notebook", "name": "Блокнот", "price": 55, "stock": 500},
-    {"id": "pencilcase", "name": "Пенал", "price": 90, "stock": 500},
-    {"id": "keychain", "name": "Брелок", "price": 115, "stock": 500},
-    {"id": "mug", "name": "Кружка", "price": 150, "stock": 500},
-    {"id": "bottle", "name": "Бутылка", "price": 155, "stock": 500},
-    {"id": "shopper", "name": "Шопер", "price": 160, "stock": 500},
-    {"id": "waistbag", "name": "Поясная сумка", "short": "Сумка", "price": 165, "stock": 500},
-    {"id": "tshirt", "name": "Футболка", "price": 175, "stock": 500},
-    {"id": "backpack", "name": "Рюкзак", "price": 185, "stock": 500},
+    {"id": "ruler", "name": "Линейка", "price": 35, "stock": 15},
+    {"id": "pencil", "name": "Карандаш", "price": 35, "stock": 20},
+    {"id": "sharpener", "name": "Точилка-ластик", "short": "Точилка", "price": 35, "stock": 10},
+    {"id": "cardcase", "name": "Чехол для карты", "short": "Чехол", "price": 35, "stock": 13},
+    {"id": "keychain", "name": "Брелок", "price": 40, "stock": 20},
+    {"id": "popsocket", "name": "Попсокет", "price": 40, "stock": 10},
+    {"id": "bracelet", "name": "Резиновый браслет", "short": "Браслет", "price": 35, "stock": 3},
+    {"id": "pen", "name": "Ручка", "price": 35, "stock": 10},
+    {"id": "pencilcase", "name": "Пенал", "price": 55, "stock": 15},
+    {"id": "mug", "name": "Кружка", "price": 85, "stock": 10},
+    {"id": "notebook", "name": "Блокнот", "price": 60, "stock": 50},
+    {"id": "keychain_ulyan", "name": "Брелок-обвес Ульян", "short": "Обвес Ульян", "price": 80, "stock": 100},
+    {"id": "socks", "name": "Носки", "price": 85, "stock": 10},
+    {"id": "xmas_ball", "name": "Елочный шар", "price": 90, "stock": 2},
+    {"id": "bottle", "name": "Бутылка для воды", "short": "Бутылка", "price": 100, "stock": 15},
+    {"id": "shopper", "name": "Шоппер", "price": 115, "stock": 5},
+    {"id": "banana_bag", "name": "Сумка-банан", "price": 115, "stock": 1},
+    {"id": "backpack", "name": "Рюкзак", "price": 145, "stock": 4},
 ]
 LOTS_BY_ID = {lot["id"]: lot for lot in LOTS}
 # endregion
@@ -821,6 +826,12 @@ def create_order(user_id: int, lot_id: str, price: int, stock: int | None = None
         raise
     finally:
         db.close()
+
+
+def clear_orders() -> int:
+    """Удаляет все покупки (для тестов). -> сколько удалено"""
+    with sqlite3.connect(DB_PATH) as db:
+        return db.execute("DELETE FROM orders").rowcount
 
 
 def lot_taken_counts() -> dict:
@@ -1931,6 +1942,68 @@ async def _run_warmup(names: list[str]):
         text=f"🖼 Прогрев готов: загружено {done}, уже было {cached}, ошибок {failed}."
              + ("" if ok else "\n⚠️ Токены не сохранились — картинки будут грузиться при каждой отправке."),
     )
+
+
+# «/resetstock» — вернуть остатки подарков к исходным (для тестов): удаляет ВСЕ покупки,
+# баллы возвращаются участникам. Нужно подтверждение словом go; если витрина уже открыта
+# по реальному расписанию — ещё и слово «точно».
+@dp.message_created(Command("resetstock"))
+async def on_resetstock(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    parts = (event.message.body.text or "").split()
+    count, spent = orders_summary()
+    if not (len(parts) > 1 and parts[1].lower() in ("go", "да", "yes")):
+        await event.message.answer(
+            f"Покупок сейчас: {count} (на {balls(spent)}). Команда удалит ВСЕ покупки у всех участников: "
+            "остатки подарков вернутся к исходным, баллы вернутся участникам.\n"
+            "Подтвердить: /resetstock go"
+        )
+        return
+    if datetime.now(MSK) >= SHOP_OPEN_AT and not (len(parts) > 2 and parts[2].lower() == "точно"):
+        await event.message.answer(
+            "Витрина уже открыта по расписанию, покупки могут быть настоящими. "
+            "Если это точно нужно: /resetstock go точно"
+        )
+        return
+    removed = clear_orders()
+    await event.message.answer(
+        f"Готово: удалено покупок — {removed}. Остатки подарков снова исходные (смотрите /stock)."
+    )
+
+
+# «/help» — список всех команд для модераторов
+ADMIN_HELP = (
+    "📋 Команды модераторов\n\n"
+    "Проверка и общение\n"
+    "/status — сводка: регистрации, очередь, вопросы, этапы, рассылки, покупки\n"
+    "/queue — задания, ждущие проверки\n"
+    "/questions — вопросы участников без ответа\n"
+    "/reply 12 текст — ответить на вопрос №12 (или «ответить» на карточку вопроса)\n"
+    "/announce текст — своя рассылка всем зарегистрированным (с подтверждением кнопкой)\n\n"
+    "Этапы мероприятия\n"
+    "/send thanks — рассылка «спасибо» и закрытие заданий: сколько получателей\n"
+    "/send exchange — рассылка про витрину и открытие покупок: сколько получателей\n"
+    "(добавьте слово go, чтобы запустить: /send thanks go)\n"
+    "/undo thanks, /undo exchange — откатить запуск (только до времени рассылки)\n\n"
+    "Витрина\n"
+    "/stock — сколько каких подарков осталось\n"
+    "/resetstock — вернуть остатки к исходным (удаляет все покупки, баллы возвращаются); подтверждение: go\n\n"
+    "Проверка и тесты\n"
+    "/preview thanks, /preview exchange — показать себе этап (reset — вернуть реальное время)\n"
+    "/resetme — удалить свои данные и пройти регистрацию заново\n"
+    "/warmup — заранее загрузить картинки (после их замены)\n"
+    "/chatid — id этого чата\n"
+    "/help — этот список\n\n"
+    "У участников только /start и /profile."
+)
+
+
+@dp.message_created(Command("help"))
+async def on_help(event: MessageCreated):
+    if not ADMIN_CHAT_ID or event.message.recipient.chat_id != ADMIN_CHAT_ID:
+        return
+    await event.message.answer(ADMIN_HELP)
 
 
 # «/resetme» — удалить ВАШИ данные (регистрацию, ответы, покупки), чтобы пройти всё заново.
